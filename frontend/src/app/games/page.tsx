@@ -156,7 +156,8 @@ async function getUpcomingGames(): Promise<TodayGame[]> {
   }
 
   // Transform to TodayGame format
-  return data.map((game: Record<string, unknown>) => {
+  const games = data as Record<string, unknown>[];
+  return games.map((game) => {
     const homeTeam = game.home_team as { name: string; conference: string } | null;
     const awayTeam = game.away_team as { name: string; conference: string } | null;
 
