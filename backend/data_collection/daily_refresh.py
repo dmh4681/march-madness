@@ -404,6 +404,54 @@ def create_today_games_view() -> dict:
     return {"today_games": len(result.data)}
 
 
+def run_ai_analysis() -> dict:
+    """Run AI analysis on today's games that don't have analysis yet."""
+    print("\n=== Running AI Analysis ===")
+
+    today = date.today().isoformat()
+
+    # Get today's games
+    result = supabase.table("games").select("id").eq("date", today).execute()
+
+    if not result.data:
+        print("No games today to analyze")
+        return {"analyses_created": 0}
+
+    games = result.data
+    print(f"Found {len(games)} games today")
+
+    analyses_created = 0
+    errors = 0
+
+    for game in games:
+        game_id = game["id"]
+
+        try:
+            # Check if analysis already exists for this game
+            existing = supabase.table("ai_analysis").select("id").eq("game_id", game_id).eq("ai_provider", "claude").execute()
+
+            if existing.data:
+                print(f"  Analysis already exists for game {game_id[:8]}...")
+                continue
+
+            # Import and run AI analysis
+            from ..api.ai_service import analyze_game
+
+            print(f"  Analyzing game {game_id[:8]}...")
+            analysis = analyze_game(game_id, provider="claude", save=True)
+
+            if analysis:
+                analyses_created += 1
+                print(f"    -> {analysis.get('recommended_bet', 'pass')} (confidence: {analysis.get('confidence_score', 0):.2f})")
+
+        except Exception as e:
+            errors += 1
+            print(f"  Error analyzing game {game_id[:8]}: {e}")
+
+    print(f"AI analyses created: {analyses_created}, errors: {errors}")
+    return {"analyses_created": analyses_created, "errors": errors}
+
+
 def run_daily_refresh() -> dict:
     """Run the complete daily refresh pipeline."""
     print("=" * 60)
@@ -434,6 +482,14 @@ def run_daily_refresh() -> dict:
         # 4. Create today's view
         view_results = create_today_games_view()
         results["today"] = view_results
+
+        # 5. Run AI analysis on today's games
+        try:
+            ai_results = run_ai_analysis()
+            results["ai_analysis"] = ai_results
+        except Exception as e:
+            print(f"AI analysis error (non-fatal): {e}")
+            results["ai_analysis"] = {"error": str(e)}
 
     except Exception as e:
         results["status"] = "error"
