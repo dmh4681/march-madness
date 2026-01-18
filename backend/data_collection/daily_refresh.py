@@ -1,0 +1,454 @@
+"""
+Daily Data Refresh Pipeline
+
+Fetches current games, spreads, and rankings, then runs predictions.
+
+Usage:
+    python -m backend.data_collection.daily_refresh
+
+Can also be triggered via API endpoint: POST /refresh
+"""
+
+import os
+import sys
+from datetime import datetime, date, timedelta
+from typing import Optional
+import json
+
+import requests
+import pandas as pd
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+load_dotenv()
+
+# Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY", "784824896571fbca6b3fe5a3957ad598")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("ERROR: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
+    sys.exit(1)
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Team name mapping for The Odds API -> our normalized names
+ODDS_API_TEAM_MAP = {
+    "Duke Blue Devils": "duke",
+    "North Carolina Tar Heels": "north-carolina",
+    "Kentucky Wildcats": "kentucky",
+    "Kansas Jayhawks": "kansas",
+    "UConn Huskies": "connecticut",
+    "Connecticut Huskies": "connecticut",
+    "Houston Cougars": "houston",
+    "Purdue Boilermakers": "purdue",
+    "Tennessee Volunteers": "tennessee",
+    "Arizona Wildcats": "arizona",
+    "Gonzaga Bulldogs": "gonzaga",
+    "Alabama Crimson Tide": "alabama",
+    "Baylor Bears": "baylor",
+    "Texas Longhorns": "texas",
+    "UCLA Bruins": "ucla",
+    "Michigan State Spartans": "michigan-state",
+    "Marquette Golden Eagles": "marquette",
+    "Creighton Bluejays": "creighton",
+    "Iowa State Cyclones": "iowa-state",
+    "Auburn Tigers": "auburn",
+    # Add more as needed
+}
+
+
+def normalize_team_name(name: str) -> str:
+    """Normalize team name for matching."""
+    if not name:
+        return ""
+
+    # Check direct mapping first
+    if name in ODDS_API_TEAM_MAP:
+        return ODDS_API_TEAM_MAP[name]
+
+    # Fall back to basic normalization
+    result = name.lower()
+
+    # Remove common suffixes
+    suffixes = [
+        "wildcats", "tigers", "bears", "eagles", "bulldogs", "cardinals",
+        "cougars", "ducks", "gators", "hawks", "huskies", "jayhawks",
+        "knights", "lions", "longhorns", "mountaineers", "panthers",
+        "seminoles", "spartans", "tar heels", "terrapins", "volunteers",
+        "wolverines", "blue devils", "crimson tide", "fighting irish",
+        "hoosiers", "boilermakers", "buckeyes", "nittany lions",
+        "golden gophers", "badgers", "hawkeyes", "cornhuskers",
+        "razorbacks", "gamecocks", "commodores", "rebels", "aggies",
+    ]
+
+    for suffix in suffixes:
+        if result.endswith(suffix):
+            result = result[:-len(suffix)].strip()
+            break
+
+    return result.replace(" ", "-").replace("'", "").replace(".", "").replace("state", "-state").strip("-")
+
+
+def get_team_id(name: str) -> Optional[str]:
+    """Get team ID from normalized name."""
+    normalized = normalize_team_name(name)
+    if not normalized:
+        return None
+
+    result = supabase.table("teams").select("id").eq("normalized_name", normalized).execute()
+
+    if result.data:
+        return result.data[0]["id"]
+
+    # Try partial match
+    result = supabase.table("teams").select("id, normalized_name").ilike("normalized_name", f"%{normalized}%").execute()
+
+    if result.data:
+        return result.data[0]["id"]
+
+    return None
+
+
+def fetch_odds_api_spreads() -> list[dict]:
+    """Fetch current college basketball spreads from The Odds API."""
+    print("\n=== Fetching Spreads from The Odds API ===")
+
+    url = "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds"
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "regions": "us",
+        "markets": "spreads,h2h,totals",
+        "oddsFormat": "american",
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+
+        data = response.json()
+        print(f"Fetched {len(data)} games with odds")
+
+        # Check remaining requests
+        remaining = response.headers.get("x-requests-remaining", "unknown")
+        used = response.headers.get("x-requests-used", "unknown")
+        print(f"API requests: {used} used, {remaining} remaining this month")
+
+        return data
+
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching odds: {e}")
+        return []
+
+
+def process_odds_data(odds_data: list[dict]) -> dict:
+    """Process odds data and match to our games."""
+    print("\n=== Processing Odds Data ===")
+
+    games_updated = 0
+    spreads_inserted = 0
+
+    for game in odds_data:
+        try:
+            home_team = game.get("home_team", "")
+            away_team = game.get("away_team", "")
+            commence_time = game.get("commence_time", "")
+
+            # Get team IDs
+            home_team_id = get_team_id(home_team)
+            away_team_id = get_team_id(away_team)
+
+            if not home_team_id or not away_team_id:
+                # Try to create teams if they don't exist
+                continue
+
+            # Parse game date
+            game_date = None
+            if commence_time:
+                game_date = datetime.fromisoformat(commence_time.replace("Z", "+00:00")).date().isoformat()
+
+            # Find or create game
+            game_result = supabase.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
+
+            if game_result.data:
+                game_id = game_result.data[0]["id"]
+            else:
+                # Create new game
+                new_game = {
+                    "external_id": game.get("id", f"{home_team_id}-{away_team_id}-{game_date}"),
+                    "date": game_date,
+                    "season": 2025,  # Current season
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id,
+                    "is_conference_game": False,  # Would need to determine this
+                    "status": "scheduled",
+                }
+                insert_result = supabase.table("games").insert(new_game).execute()
+                if insert_result.data:
+                    game_id = insert_result.data[0]["id"]
+                    games_updated += 1
+                else:
+                    continue
+
+            # Extract spread data from bookmakers
+            home_spread = None
+            home_ml = None
+            away_ml = None
+            over_under = None
+
+            for bookmaker in game.get("bookmakers", []):
+                for market in bookmaker.get("markets", []):
+                    if market.get("key") == "spreads":
+                        for outcome in market.get("outcomes", []):
+                            if outcome.get("name") == home_team:
+                                home_spread = outcome.get("point")
+
+                    elif market.get("key") == "h2h":
+                        for outcome in market.get("outcomes", []):
+                            if outcome.get("name") == home_team:
+                                home_ml = outcome.get("price")
+                            elif outcome.get("name") == away_team:
+                                away_ml = outcome.get("price")
+
+                    elif market.get("key") == "totals":
+                        for outcome in market.get("outcomes", []):
+                            if outcome.get("name") == "Over":
+                                over_under = outcome.get("point")
+
+                # Use first bookmaker's odds
+                if home_spread is not None:
+                    break
+
+            # Insert spread record
+            if home_spread is not None:
+                spread_data = {
+                    "game_id": game_id,
+                    "home_spread": home_spread,
+                    "away_spread": -home_spread if home_spread else None,
+                    "home_ml": home_ml,
+                    "away_ml": away_ml,
+                    "over_under": over_under,
+                    "source": "odds-api",
+                    "is_closing_line": False,
+                }
+
+                supabase.table("spreads").insert(spread_data).execute()
+                spreads_inserted += 1
+
+        except Exception as e:
+            print(f"  Error processing game: {e}")
+            continue
+
+    print(f"Games created/updated: {games_updated}")
+    print(f"Spreads inserted: {spreads_inserted}")
+
+    return {
+        "games_updated": games_updated,
+        "spreads_inserted": spreads_inserted,
+    }
+
+
+def fetch_cbbpy_games() -> list[dict]:
+    """Fetch recent and upcoming games from CBBpy."""
+    print("\n=== Fetching Games from CBBpy ===")
+
+    try:
+        from cbbpy.mens_scraper import get_games_range
+
+        # Get games from past week and next week
+        start_date = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_date = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
+
+        games_df = get_games_range(start_date, end_date)
+
+        if games_df is None or len(games_df) == 0:
+            print("No games found from CBBpy")
+            return []
+
+        print(f"Fetched {len(games_df)} games from CBBpy")
+        return games_df.to_dict('records')
+
+    except ImportError:
+        print("CBBpy not available, skipping game fetch")
+        return []
+    except Exception as e:
+        print(f"Error fetching games from CBBpy: {e}")
+        return []
+
+
+def run_predictions() -> dict:
+    """Run predictions on upcoming games."""
+    print("\n=== Running Predictions ===")
+
+    # Get upcoming games without predictions
+    today = date.today().isoformat()
+
+    result = supabase.table("games").select(
+        "id, date, home_team_id, away_team_id, is_conference_game"
+    ).gte("date", today).is_("home_score", "null").execute()
+
+    if not result.data:
+        print("No upcoming games to predict")
+        return {"predictions_created": 0}
+
+    games = result.data
+    print(f"Found {len(games)} upcoming games")
+
+    predictions_created = 0
+
+    for game in games:
+        try:
+            # Check if prediction already exists
+            existing = supabase.table("predictions").select("id").eq("game_id", game["id"]).execute()
+            if existing.data:
+                continue
+
+            # Get latest spread for this game
+            spread_result = supabase.table("spreads").select("home_spread").eq("game_id", game["id"]).order("captured_at", desc=True).limit(1).execute()
+
+            spread = spread_result.data[0]["home_spread"] if spread_result.data else None
+
+            # Simple prediction logic (placeholder for ML model)
+            # In reality, this would call your trained model
+            home_cover_prob = 0.5
+            confidence_tier = "low"
+            recommended_bet = "pass"
+            edge_pct = None
+
+            if spread is not None:
+                # Basic heuristic: home teams slightly favored to cover
+                if game.get("is_conference_game"):
+                    home_cover_prob = 0.52  # Slight home edge in conference
+                    if abs(spread) > 10:
+                        # Big favorites less likely to cover
+                        home_cover_prob = 0.48
+                    elif abs(spread) < 3:
+                        # Close games, home edge
+                        home_cover_prob = 0.54
+
+                # Determine confidence
+                edge = abs(home_cover_prob - 0.5) * 100
+                if edge > 5:
+                    confidence_tier = "high"
+                    edge_pct = edge
+                    recommended_bet = "home_spread" if home_cover_prob > 0.5 else "away_spread"
+                elif edge > 2:
+                    confidence_tier = "medium"
+                    edge_pct = edge
+                    recommended_bet = "home_spread" if home_cover_prob > 0.5 else "away_spread"
+
+            # Insert prediction
+            prediction_data = {
+                "game_id": game["id"],
+                "model_name": "baseline_v1",
+                "predicted_home_cover_prob": home_cover_prob,
+                "predicted_away_cover_prob": 1 - home_cover_prob,
+                "spread_at_prediction": spread,
+                "confidence_tier": confidence_tier,
+                "recommended_bet": recommended_bet,
+                "edge_pct": edge_pct,
+            }
+
+            supabase.table("predictions").insert(prediction_data).execute()
+            predictions_created += 1
+
+        except Exception as e:
+            print(f"  Error predicting game {game['id']}: {e}")
+            continue
+
+    print(f"Predictions created: {predictions_created}")
+    return {"predictions_created": predictions_created}
+
+
+def update_game_results() -> dict:
+    """Update scores for completed games."""
+    print("\n=== Updating Game Results ===")
+
+    # Find games that should have finished but don't have scores
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    result = supabase.table("games").select("id, external_id").lte("date", yesterday).is_("home_score", "null").limit(50).execute()
+
+    if not result.data:
+        print("No games need score updates")
+        return {"games_scored": 0}
+
+    # Would fetch actual scores from CBBpy or ESPN
+    # For now, just report what needs updating
+    print(f"Found {len(result.data)} games needing scores")
+
+    return {"games_needing_scores": len(result.data)}
+
+
+def create_today_games_view() -> dict:
+    """Populate the today_games view data."""
+    print("\n=== Creating Today's Games View ===")
+
+    today = date.today().isoformat()
+
+    # Get today's games with all related data
+    result = supabase.table("games").select("""
+        id,
+        date,
+        is_conference_game,
+        home_team:home_team_id(id, name, conference),
+        away_team:away_team_id(id, name, conference)
+    """).eq("date", today).execute()
+
+    if not result.data:
+        print("No games today")
+        return {"today_games": 0}
+
+    print(f"Found {len(result.data)} games today")
+    return {"today_games": len(result.data)}
+
+
+def run_daily_refresh() -> dict:
+    """Run the complete daily refresh pipeline."""
+    print("=" * 60)
+    print("Conference Contrarian - Daily Data Refresh")
+    print(f"Started at: {datetime.now().isoformat()}")
+    print("=" * 60)
+
+    results = {
+        "timestamp": datetime.now().isoformat(),
+        "status": "success",
+    }
+
+    try:
+        # 1. Fetch current spreads from The Odds API
+        odds_data = fetch_odds_api_spreads()
+        if odds_data:
+            odds_results = process_odds_data(odds_data)
+            results["odds"] = odds_results
+
+        # 2. Run predictions on upcoming games
+        prediction_results = run_predictions()
+        results["predictions"] = prediction_results
+
+        # 3. Update completed game results
+        score_results = update_game_results()
+        results["scores"] = score_results
+
+        # 4. Create today's view
+        view_results = create_today_games_view()
+        results["today"] = view_results
+
+    except Exception as e:
+        results["status"] = "error"
+        results["error"] = str(e)
+        print(f"\nERROR: {e}")
+
+    print("\n" + "=" * 60)
+    print("Daily Refresh Complete")
+    print(f"Finished at: {datetime.now().isoformat()}")
+    print("=" * 60)
+
+    return results
+
+
+if __name__ == "__main__":
+    results = run_daily_refresh()
+    print("\nResults:")
+    print(json.dumps(results, indent=2))

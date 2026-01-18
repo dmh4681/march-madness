@@ -1,0 +1,39 @@
+name: Daily Data Refresh
+
+on:
+  # Run daily at 6 AM EST (11 AM UTC)
+  schedule:
+    - cron: '0 11 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Daily Refresh
+        run: |
+          echo "Triggering daily refresh at $(date)"
+
+          RESPONSE=$(curl -s -X POST \
+            "${{ secrets.RAILWAY_API_URL }}/refresh" \
+            -H "Content-Type: application/json" \
+            -d '{"api_key": "${{ secrets.REFRESH_API_KEY }}"}' \
+            --max-time 300)
+
+          echo "Response: $RESPONSE"
+
+          # Check if successful
+          if echo "$RESPONSE" | grep -q '"status":"success"'; then
+            echo "Refresh completed successfully"
+          else
+            echo "Refresh may have failed, check logs"
+            exit 1
+          fi
+
+      - name: Report Status
+        if: always()
+        run: |
+          echo "Daily refresh job completed at $(date)"

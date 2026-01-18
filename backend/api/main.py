@@ -390,22 +390,37 @@ def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
 
 
 @app.post("/refresh")
-def refresh_data():
+def refresh_data(api_key: Optional[str] = None):
     """
     Trigger a data refresh (games, spreads, rankings).
 
     This endpoint should be called by a cron job or manually.
+    Optionally pass api_key for authentication.
     """
-    # TODO: Implement actual refresh logic
-    # - Fetch today's games from CBBpy
-    # - Fetch current spreads from The Odds API
-    # - Update rankings if new poll released
-    # - Run predictions on new games
-    return {
-        "status": "refresh_triggered",
-        "timestamp": datetime.now().isoformat(),
-        "message": "Data refresh not yet implemented",
-    }
+    # Simple API key check (optional, for cron jobs)
+    expected_key = os.getenv("REFRESH_API_KEY")
+    if expected_key and api_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    try:
+        from ..data_collection.daily_refresh import run_daily_refresh
+
+        results = run_daily_refresh()
+
+        return {
+            "status": results.get("status", "success"),
+            "timestamp": results.get("timestamp"),
+            "results": results,
+        }
+
+    except ImportError as e:
+        return {
+            "status": "error",
+            "timestamp": datetime.now().isoformat(),
+            "error": f"Import error: {str(e)}",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Refresh failed: {str(e)}")
 
 
 @app.get("/backtest")

@@ -133,55 +133,18 @@ async function getUpcomingGames(): Promise<TodayGame[]> {
     return DEMO_GAMES;
   }
 
-  // Get games from next 7 days
-  const today = new Date().toISOString().split('T')[0];
-  const nextWeek = addDays(new Date(), 7).toISOString().split('T')[0];
-
+  // Use the upcoming_games view which has all the joined data
   const { data, error } = await supabase
-    .from('games')
-    .select(`
-      id,
-      date,
-      season,
-      is_conference_game,
-      home_team:home_team_id(name, conference),
-      away_team:away_team_id(name, conference)
-    `)
-    .gte('date', today)
-    .lte('date', nextWeek)
-    .order('date', { ascending: true }) as { data: unknown[] | null; error: unknown };
+    .from('upcoming_games')
+    .select('*')
+    .order('date', { ascending: true });
 
-  if (error || !data) {
+  if (error || !data || data.length === 0) {
+    console.error('Error fetching upcoming games:', error);
     return DEMO_GAMES;
   }
 
-  // Transform to TodayGame format
-  const games = data as Record<string, unknown>[];
-  return games.map((game) => {
-    const homeTeam = game.home_team as { name: string; conference: string } | null;
-    const awayTeam = game.away_team as { name: string; conference: string } | null;
-
-    return {
-      id: game.id as string,
-      date: game.date as string,
-      tip_time: game.date as string,
-      home_team: homeTeam?.name || 'TBD',
-      home_conference: homeTeam?.conference || '',
-      away_team: awayTeam?.name || 'TBD',
-      away_conference: awayTeam?.conference || '',
-      is_conference_game: game.is_conference_game as boolean,
-      home_spread: null,
-      home_ml: null,
-      away_ml: null,
-      over_under: null,
-      home_rank: null,
-      away_rank: null,
-      predicted_home_cover_prob: null,
-      confidence_tier: null,
-      recommended_bet: null,
-      edge_pct: null,
-    };
-  });
+  return data as TodayGame[];
 }
 
 // Group games by date
