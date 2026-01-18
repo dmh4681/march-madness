@@ -6,6 +6,7 @@ import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, Ga
 import { formatSpread, formatMoneyline, formatProbability } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AIAnalysisPanel } from '@/components/AIAnalysis';
+import { AIAnalysisButton } from '@/components/AIAnalysisButton';
 
 // Demo game for when Supabase isn't configured
 const DEMO_GAME: GameWithDetails = {
@@ -520,9 +521,17 @@ export default async function GameDetailPage({ params }: PageProps) {
 
           {/* Right Column - AI Analysis */}
           <div className="lg:col-span-2">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              AI Analysis
-            </h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">
+                AI Analysis
+              </h3>
+              <div className="w-48">
+                <AIAnalysisButton
+                  gameId={game.id}
+                  hasExistingAnalysis={game.ai_analyses.length > 0}
+                />
+              </div>
+            </div>
             <AIAnalysisPanel analyses={game.ai_analyses} />
           </div>
         </div>
