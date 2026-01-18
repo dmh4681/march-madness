@@ -63,7 +63,12 @@ def normalize_team_name(name: str) -> str:
 
 def get_or_create_team(name: str, conference: str = None) -> dict:
     """Get team by name or create if not exists."""
+    if pd.isna(name) or not name:
+        return None
+
     normalized = normalize_team_name(name)
+    if not normalized:
+        return None
 
     # Check if exists
     result = supabase.table("teams").select("*").eq("normalized_name", normalized).execute()
@@ -71,14 +76,17 @@ def get_or_create_team(name: str, conference: str = None) -> dict:
     if result.data:
         return result.data[0]
 
-    # Create new team
+    # Create new team - handle NaN values
     power_conferences = {"ACC", "Big Ten", "Big 12", "SEC", "Big East", "Pac-12"}
 
+    # Convert NaN to None
+    conf = None if pd.isna(conference) else conference
+
     team_data = {
-        "name": name,
+        "name": str(name),
         "normalized_name": normalized,
-        "conference": conference,
-        "is_power_conference": conference in power_conferences if conference else False,
+        "conference": conf,
+        "is_power_conference": conf in power_conferences if conf else False,
     }
 
     result = supabase.table("teams").insert(team_data).execute()
@@ -108,12 +116,23 @@ def migrate_teams():
     print(f"Found {len(all_teams)} unique teams")
 
     created = 0
+    skipped = 0
     for _, row in all_teams.iterrows():
-        if pd.notna(row["name"]):
-            get_or_create_team(row["name"], row.get("conference"))
-            created += 1
+        if pd.notna(row["name"]) and row["name"]:
+            try:
+                team = get_or_create_team(row["name"], row.get("conference"))
+                if team:
+                    created += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                skipped += 1
+                if skipped <= 3:
+                    print(f"  Error creating team {row['name']}: {e}")
+        else:
+            skipped += 1
 
-    print(f"Created/verified {created} teams")
+    print(f"Created/verified {created} teams, skipped {skipped}")
 
 
 def migrate_games():
@@ -159,15 +178,29 @@ def migrate_games():
                 except:
                     game_date = None
 
+            # Handle external_id
+            ext_id = row.get("game_id", "")
+            if pd.isna(ext_id):
+                ext_id = f"{home_norm}-{away_norm}-{game_date}"
+            else:
+                ext_id = str(ext_id)
+
+            # Handle is_conference_game
+            is_conf = row.get("same_conference", False)
+            if pd.isna(is_conf):
+                is_conf = False
+            else:
+                is_conf = bool(is_conf)
+
             game_data = {
-                "external_id": str(row.get("game_id", "")),
+                "external_id": ext_id,
                 "date": game_date,
                 "season": int(row["season"]) if pd.notna(row.get("season")) else 2024,
                 "home_team_id": home_team_id,
                 "away_team_id": away_team_id,
                 "home_score": int(row["home_score"]) if pd.notna(row.get("home_score")) else None,
                 "away_score": int(row["away_score"]) if pd.notna(row.get("away_score")) else None,
-                "is_conference_game": bool(row.get("same_conference", False)),
+                "is_conference_game": is_conf,
                 "status": "final" if pd.notna(row.get("home_score")) else "scheduled",
             }
 
