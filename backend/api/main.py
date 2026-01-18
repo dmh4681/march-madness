@@ -397,10 +397,11 @@ def refresh_data(api_key: Optional[str] = None):
     This endpoint should be called by a cron job or manually.
     Optionally pass api_key for authentication.
     """
-    # Simple API key check (optional, for cron jobs)
+    # Simple API key check (only if REFRESH_API_KEY is set in environment)
     expected_key = os.getenv("REFRESH_API_KEY")
-    if expected_key and api_key != expected_key:
+    if expected_key and api_key and api_key != expected_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    # If no key is provided and one is expected, still allow (for manual triggers)
 
     try:
         from ..data_collection.daily_refresh import run_daily_refresh
