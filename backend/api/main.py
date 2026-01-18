@@ -1,74 +1,137 @@
 """
 Conference Contrarian API
 
-FastAPI backend for serving predictions.
-Only deploy after edge validates and model shows positive ROI.
+FastAPI backend for serving predictions and AI analysis.
 
 Usage:
-    uvicorn main:app --reload
+    uvicorn backend.api.main:app --reload
 """
 
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+import os
+from datetime import date, datetime
+from typing import Optional, Literal
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+load_dotenv()
+
+# Import our modules
+from .supabase_client import (
+    get_game_by_id,
+    get_games_by_date,
+    get_upcoming_games,
+    get_today_games_view,
+    get_latest_spread,
+    get_latest_prediction,
+    get_ai_analyses,
+    get_season_performance,
+    calculate_season_stats,
+    get_current_rankings,
+)
+from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
+
 app = FastAPI(
     title="Conference Contrarian API",
-    description="NCAA basketball betting edge analyzer",
-    version="0.1.0",
+    description="AI-powered NCAA basketball betting analysis",
+    version="1.0.0",
 )
 
-# CORS for frontend
+# CORS configuration
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# Request/Response models
-class GamePredictionRequest(BaseModel):
-    favorite_team: str
-    underdog_team: str
-    favorite_rank: int
-    is_home_underdog: bool = False
+# ============================================
+# REQUEST/RESPONSE MODELS
+# ============================================
+
+
+class PredictRequest(BaseModel):
+    game_id: Optional[str] = None
+    # Or provide matchup details
+    home_team: Optional[str] = None
+    away_team: Optional[str] = None
     spread: Optional[float] = None
+    is_conference_game: Optional[bool] = False
+    home_rank: Optional[int] = None
+    away_rank: Optional[int] = None
 
 
-class GamePrediction(BaseModel):
-    favorite_team: str
-    underdog_team: str
-    cover_probability: float
+class PredictResponse(BaseModel):
+    game_id: Optional[str]
+    home_team: str
+    away_team: str
+    home_cover_prob: float
+    away_cover_prob: float
     confidence: str
-    recommendation: str
-    edge_pct: float
-    kelly_fraction: Optional[float] = None
+    recommended_bet: str
+    edge_pct: Optional[float]
+    reasoning: Optional[str]
 
 
-class TrackRecord(BaseModel):
-    total_predictions: int
+class AIAnalysisRequest(BaseModel):
+    game_id: str
+    provider: Literal["claude", "grok"] = "claude"
+
+
+class AIAnalysisResponse(BaseModel):
+    game_id: str
+    provider: str
+    recommended_bet: str
+    confidence_score: float
+    key_factors: list[str]
+    reasoning: str
+    created_at: Optional[str] = None
+
+
+class StatsResponse(BaseModel):
+    season: int
+    total_bets: int
     wins: int
     losses: int
     pushes: int
-    win_rate: float
-    roi: float
-    period: str
+    win_pct: float
+    units_wagered: float
+    units_won: float
+    roi_pct: float
 
 
-# Endpoints
+class GameResponse(BaseModel):
+    id: str
+    date: str
+    home_team: str
+    away_team: str
+    home_rank: Optional[int]
+    away_rank: Optional[int]
+    home_spread: Optional[float]
+    is_conference_game: bool
+    prediction: Optional[dict] = None
+    ai_analyses: list[dict] = []
+
+
+# ============================================
+# ENDPOINTS
+# ============================================
+
+
 @app.get("/")
 def root():
-    """Health check."""
+    """API info and health check."""
     return {
-        "message": "Conference Contrarian API",
+        "name": "Conference Contrarian API",
+        "version": "1.0.0",
         "status": "running",
-        "version": "0.1.0",
+        "timestamp": datetime.now().isoformat(),
     }
 
 
@@ -78,102 +141,289 @@ def health():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "model_loaded": False,  # TODO: Check if model file exists
+        "supabase_configured": bool(os.getenv("SUPABASE_URL")),
+        "claude_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "grok_configured": bool(os.getenv("GROK_API_KEY")),
     }
 
 
-@app.post("/predict", response_model=GamePrediction)
-def predict_game(request: GamePredictionRequest):
+@app.post("/predict", response_model=PredictResponse)
+def predict(request: PredictRequest):
     """
-    Get prediction for a single game.
+    Get prediction for a game.
 
-    POST /predict
-    {
-        "favorite_team": "Duke",
-        "underdog_team": "NC State",
-        "favorite_rank": 8,
-        "is_home_underdog": true
-    }
+    Can provide either:
+    - game_id: UUID of an existing game in the database
+    - Or: home_team, away_team, spread, etc. for ad-hoc prediction
     """
-    # TODO: Load model and make real prediction
-    # For now, return placeholder
+    if request.game_id:
+        # Fetch game from database
+        game = get_game_by_id(request.game_id)
+        if not game:
+            raise HTTPException(status_code=404, detail="Game not found")
 
-    # Validate rank
-    if request.favorite_rank < 1 or request.favorite_rank > 25:
-        raise HTTPException(status_code=400, detail="Favorite rank must be 1-25")
+        spread_data = get_latest_spread(request.game_id)
+        prediction = get_latest_prediction(request.game_id)
 
-    # Placeholder prediction logic
-    # Higher rank = weaker favorite = better for underdog
-    base_prob = 0.45 + (request.favorite_rank - 1) * 0.01
-    if request.is_home_underdog:
-        base_prob += 0.03
+        home_team = game.get("home_team", {}).get("name", "Unknown")
+        away_team = game.get("away_team", {}).get("name", "Unknown")
 
-    # Clamp to reasonable range
-    prob = min(0.70, max(0.35, base_prob))
+        if prediction:
+            return PredictResponse(
+                game_id=request.game_id,
+                home_team=home_team,
+                away_team=away_team,
+                home_cover_prob=prediction.get("predicted_home_cover_prob", 0.5),
+                away_cover_prob=prediction.get("predicted_away_cover_prob", 0.5),
+                confidence=prediction.get("confidence_tier", "low"),
+                recommended_bet=prediction.get("recommended_bet", "pass"),
+                edge_pct=prediction.get("edge_pct"),
+                reasoning=None,
+            )
 
-    # Determine recommendation
-    if prob >= 0.60:
-        recommendation = "BET"
-        confidence = "HIGH"
-    elif prob >= 0.55:
-        recommendation = "LEAN"
-        confidence = "MEDIUM"
+        # No prediction exists - use quick heuristic
+        context = build_game_context(request.game_id)
+        quick = get_quick_recommendation(context)
+
+        return PredictResponse(
+            game_id=request.game_id,
+            home_team=home_team,
+            away_team=away_team,
+            home_cover_prob=0.5,
+            away_cover_prob=0.5,
+            confidence="low",
+            recommended_bet=quick["recommended_bet"],
+            edge_pct=None,
+            reasoning=quick["reasoning"],
+        )
+
+    elif request.home_team and request.away_team:
+        # Ad-hoc prediction
+        context = {
+            "home_team": request.home_team,
+            "away_team": request.away_team,
+            "home_rank": request.home_rank,
+            "away_rank": request.away_rank,
+            "spread": request.spread,
+            "is_conference_game": request.is_conference_game,
+        }
+
+        quick = get_quick_recommendation(context)
+
+        # Simple probability estimation
+        home_prob = 0.5
+        if request.spread:
+            # Rough conversion: each point of spread ~ 3% probability
+            home_prob = 0.5 - (request.spread * 0.03)
+            home_prob = max(0.2, min(0.8, home_prob))
+
+        return PredictResponse(
+            game_id=None,
+            home_team=request.home_team,
+            away_team=request.away_team,
+            home_cover_prob=home_prob,
+            away_cover_prob=1 - home_prob,
+            confidence="low",
+            recommended_bet=quick["recommended_bet"],
+            edge_pct=None,
+            reasoning=quick["reasoning"],
+        )
+
     else:
-        recommendation = "PASS"
-        confidence = "LOW"
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either game_id or (home_team + away_team)"
+        )
 
-    return GamePrediction(
-        favorite_team=request.favorite_team,
-        underdog_team=request.underdog_team,
-        cover_probability=prob,
-        confidence=confidence,
-        recommendation=recommendation,
-        edge_pct=prob - 0.524,
-        kelly_fraction=max(0, (prob * 0.91 - (1 - prob)) / 0.91) * 0.25 if prob > 0.52 else None,
-    )
+
+@app.post("/ai-analysis", response_model=AIAnalysisResponse)
+def ai_analysis(request: AIAnalysisRequest):
+    """
+    Generate AI analysis for a game.
+
+    Uses Claude or Grok to analyze the matchup and provide betting recommendations.
+    """
+    try:
+        result = analyze_game(request.game_id, request.provider)
+
+        return AIAnalysisResponse(
+            game_id=request.game_id,
+            provider=result["ai_provider"],
+            recommended_bet=result["recommended_bet"],
+            confidence_score=result["confidence_score"],
+            key_factors=result["key_factors"],
+            reasoning=result["reasoning"],
+            created_at=result.get("created_at"),
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
 
 @app.get("/today")
-def get_todays_plays():
+def get_today():
     """
-    Get today's recommended plays.
-
-    Returns list of games with model predictions, sorted by edge.
+    Get today's games with predictions and analysis.
     """
-    # TODO: Fetch today's games and run predictions
-    return {
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "games": [],
-        "message": "No games scraped yet. Run data collection first.",
-    }
+    try:
+        games = get_today_games_view()
+        return {
+            "date": date.today().isoformat(),
+            "game_count": len(games),
+            "games": games,
+        }
+    except Exception as e:
+        # Return empty if database not configured
+        return {
+            "date": date.today().isoformat(),
+            "game_count": 0,
+            "games": [],
+            "error": str(e),
+        }
 
 
-@app.get("/stats", response_model=TrackRecord)
-def get_track_record():
+@app.get("/games")
+def get_games(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    days: int = 7
+):
     """
-    Get model's historical performance.
+    Get upcoming games.
 
-    Returns win rate, ROI, and prediction counts.
+    Query params:
+    - start_date: ISO date string (default: today)
+    - end_date: ISO date string (default: start + days)
+    - days: Number of days to fetch (default: 7)
     """
-    # TODO: Calculate from predictions table
-    return TrackRecord(
-        total_predictions=0,
-        wins=0,
-        losses=0,
-        pushes=0,
-        win_rate=0.0,
-        roi=0.0,
-        period="all-time",
+    try:
+        if start_date:
+            games = get_games_by_date(date.fromisoformat(start_date))
+        else:
+            games = get_upcoming_games(days)
+
+        return {
+            "game_count": len(games),
+            "games": games,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/games/{game_id}", response_model=GameResponse)
+def get_game(game_id: str):
+    """
+    Get detailed info for a specific game.
+    """
+    game = get_game_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    spread = get_latest_spread(game_id)
+    prediction = get_latest_prediction(game_id)
+    analyses = get_ai_analyses(game_id)
+
+    return GameResponse(
+        id=game_id,
+        date=game.get("date"),
+        home_team=game.get("home_team", {}).get("name", "Unknown"),
+        away_team=game.get("away_team", {}).get("name", "Unknown"),
+        home_rank=None,  # TODO: get from rankings
+        away_rank=None,
+        home_spread=spread.get("home_spread") if spread else None,
+        is_conference_game=game.get("is_conference_game", False),
+        prediction=prediction,
+        ai_analyses=analyses,
     )
 
 
-@app.get("/game/{game_id}")
-def get_game_analysis(game_id: str):
+@app.get("/stats", response_model=StatsResponse)
+def get_stats(season: Optional[int] = None):
     """
-    Get detailed analysis for a specific game.
+    Get performance statistics.
     """
-    # TODO: Look up game and return analysis
-    raise HTTPException(status_code=404, detail="Game not found")
+    if season is None:
+        season = date.today().year
+
+    try:
+        stats = calculate_season_stats(season)
+
+        if "error" in stats:
+            # Return zeros if no data
+            return StatsResponse(
+                season=season,
+                total_bets=0,
+                wins=0,
+                losses=0,
+                pushes=0,
+                win_pct=0.0,
+                units_wagered=0.0,
+                units_won=0.0,
+                roi_pct=0.0,
+            )
+
+        return StatsResponse(**stats)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/rankings")
+def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
+    """
+    Get current AP rankings.
+    """
+    if season is None:
+        season = date.today().year
+
+    try:
+        rankings = get_current_rankings(season, poll_type)
+        return {
+            "season": season,
+            "poll_type": poll_type,
+            "rankings": rankings,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/refresh")
+def refresh_data():
+    """
+    Trigger a data refresh (games, spreads, rankings).
+
+    This endpoint should be called by a cron job or manually.
+    """
+    # TODO: Implement actual refresh logic
+    # - Fetch today's games from CBBpy
+    # - Fetch current spreads from The Odds API
+    # - Update rankings if new poll released
+    # - Run predictions on new games
+    return {
+        "status": "refresh_triggered",
+        "timestamp": datetime.now().isoformat(),
+        "message": "Data refresh not yet implemented",
+    }
+
+
+@app.get("/backtest")
+def backtest(
+    start_date: str,
+    end_date: str,
+    model: str = "baseline"
+):
+    """
+    Run backtest on historical data.
+    """
+    # TODO: Implement backtesting
+    return {
+        "start_date": start_date,
+        "end_date": end_date,
+        "model": model,
+        "message": "Backtesting not yet implemented",
+    }
 
 
 if __name__ == "__main__":
