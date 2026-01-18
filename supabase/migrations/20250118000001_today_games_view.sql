@@ -1,6 +1,10 @@
 -- Create a view for today's games with all relevant data
 -- This makes it easy for the frontend to fetch everything in one query
 
+-- Drop existing views first (they may have different column types)
+DROP VIEW IF EXISTS today_games CASCADE;
+DROP VIEW IF EXISTS upcoming_games CASCADE;
+
 CREATE OR REPLACE VIEW today_games AS
 SELECT
     g.id,
