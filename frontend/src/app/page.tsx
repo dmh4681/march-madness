@@ -4,101 +4,9 @@ import type { TodayGame, DashboardStats } from '@/lib/types';
 import { PicksList, StatsCard } from '@/components/PicksList';
 import { GamesSection } from '@/components/GamesSection';
 
-// Demo data for when Supabase isn't configured
-const DEMO_GAMES: TodayGame[] = [
-  {
-    id: 'demo-1',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 3600000).toISOString(),
-    home_team: 'Duke Blue Devils',
-    home_conference: 'ACC',
-    away_team: 'North Carolina Tar Heels',
-    away_conference: 'ACC',
-    is_conference_game: true,
-    home_spread: -3.5,
-    home_ml: -160,
-    away_ml: 140,
-    over_under: 145.5,
-    home_rank: 9,
-    away_rank: 7,
-    predicted_home_cover_prob: 0.58,
-    confidence_tier: 'medium',
-    recommended_bet: 'home_spread',
-    edge_pct: 4.2,
-  },
-  {
-    id: 'demo-2',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 7200000).toISOString(),
-    home_team: 'Houston Cougars',
-    home_conference: 'Big 12',
-    away_team: 'Kansas Jayhawks',
-    away_conference: 'Big 12',
-    is_conference_game: true,
-    home_spread: -5.5,
-    home_ml: -220,
-    away_ml: 180,
-    over_under: 138.5,
-    home_rank: 3,
-    away_rank: 12,
-    predicted_home_cover_prob: 0.62,
-    confidence_tier: 'high',
-    recommended_bet: 'home_spread',
-    edge_pct: 7.8,
-  },
-  {
-    id: 'demo-3',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 10800000).toISOString(),
-    home_team: 'Kentucky Wildcats',
-    home_conference: 'SEC',
-    away_team: 'Tennessee Volunteers',
-    away_conference: 'SEC',
-    is_conference_game: true,
-    home_spread: 2.5,
-    home_ml: 115,
-    away_ml: -135,
-    over_under: 151.0,
-    home_rank: null,
-    away_rank: 5,
-    predicted_home_cover_prob: 0.55,
-    confidence_tier: 'high',
-    recommended_bet: 'home_spread',
-    edge_pct: 6.1,
-  },
-  {
-    id: 'demo-4',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 14400000).toISOString(),
-    home_team: 'UCLA Bruins',
-    home_conference: 'Big Ten',
-    away_team: 'Arizona Wildcats',
-    away_conference: 'Big 12',
-    is_conference_game: false,
-    home_spread: 1.5,
-    home_ml: -105,
-    away_ml: -115,
-    over_under: 142.0,
-    home_rank: 15,
-    away_rank: 8,
-    predicted_home_cover_prob: 0.48,
-    confidence_tier: 'low',
-    recommended_bet: 'pass',
-    edge_pct: null,
-  },
-];
-
-const DEMO_STATS: DashboardStats = {
-  season_roi: 8.4,
-  win_rate: 56.2,
-  total_bets: 89,
-  current_streak: 3,
-  streak_type: 'W',
-};
-
 async function getTodayGames(): Promise<TodayGame[]> {
   if (!isSupabaseConfigured()) {
-    return DEMO_GAMES;
+    return [];
   }
 
   const { data, error } = await supabase
@@ -108,15 +16,23 @@ async function getTodayGames(): Promise<TodayGame[]> {
 
   if (error) {
     console.error('Error fetching games:', error);
-    return DEMO_GAMES;
+    return [];
   }
 
   return data || [];
 }
 
+const DEFAULT_STATS: DashboardStats = {
+  season_roi: 0,
+  win_rate: 0,
+  total_bets: 0,
+  current_streak: 0,
+  streak_type: 'W',
+};
+
 async function getStats(): Promise<DashboardStats> {
   if (!isSupabaseConfigured()) {
-    return DEMO_STATS;
+    return DEFAULT_STATS;
   }
 
   const currentSeason = new Date().getFullYear();
@@ -131,7 +47,7 @@ async function getStats(): Promise<DashboardStats> {
     };
 
   if (error || !data) {
-    return DEMO_STATS;
+    return DEFAULT_STATS;
   }
 
   // Calculate streak from recent bet results

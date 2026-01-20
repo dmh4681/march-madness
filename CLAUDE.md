@@ -192,22 +192,28 @@ The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpo
 ## Current Status
 
 **Working:**
-- Dashboard with real games and spreads
-- Game detail pages with AI analysis
+- Dashboard with table view of today's games and AI-powered picks
+- Game detail pages with full AI analysis (Claude)
 - "Run AI Analysis" button on game pages
 - Daily refresh pipeline (GitHub Actions)
 - KenPom advanced analytics integration
-- AI analysis enhanced with KenPom data
-- Performance tracking page (demo data)
-- March Madness preview page
+- AI analysis enhanced with KenPom data (AdjO, AdjD, tempo, SOS, luck)
+- SQL views prioritize AI analysis over baseline predictions
+- Spread-based probability heuristics for baseline model
+- Compact table view with games showing Pick, Confidence, and Edge
+
+**In Progress:**
+- Performance tracking page (placeholder, needs real data)
+- March Madness bracket page (placeholder, ready for Selection Sunday)
 
 **Pending/Future:**
+- Grok AI analysis (secondary AI for comparison) - see implementation plan
+- Haslametrics integration (requires Selenium scraping) - see implementation plan
 - User authentication (Supabase Auth)
 - Payment/subscription (Stripe)
 - Custom domain
 - Bet result tracking
 - Email notifications for high-confidence picks
-- Haslametrics integration (no API, requires Selenium)
 - Mobile app
 
 ## Common Tasks
@@ -229,11 +235,178 @@ The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpo
 
 ## Notes
 
-- Frontend uses demo data fallback when Supabase isn't configured
+- Frontend shows empty states when Supabase isn't configured (no demo data)
 - The Odds API free tier: 500 requests/month
 - Railway auto-deploys on git push
 - Vercel auto-deploys on git push
 - KenPom requires paid subscription - scraper uses browser automation via Selenium
+- AI analysis is stored in `ai_analysis` table with `ai_provider` field to distinguish Claude vs Grok
+
+## Implementation Plan: Grok + Haslametrics
+
+### Phase 1: Grok AI Integration
+
+**Goal:** Add Grok as a secondary AI provider to compare analysis with Claude.
+
+**Backend Changes (`backend/api/ai_service.py`):**
+```python
+# 1. Add Grok API client (uses OpenAI-compatible API)
+import openai
+
+class AIAnalyzer:
+    def __init__(self):
+        self.claude_client = anthropic.Anthropic()
+        self.grok_client = openai.OpenAI(
+            api_key=os.getenv("GROK_API_KEY"),
+            base_url="https://api.x.ai/v1"  # Grok API endpoint
+        )
+
+    def _grok_analyze(self, prompt: str) -> dict:
+        response = self.grok_client.chat.completions.create(
+            model="grok-beta",  # or latest Grok model
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3
+        )
+        return self._parse_response(response.choices[0].message.content)
+```
+
+**API Endpoint Updates (`backend/api/main.py`):**
+- Add `provider` parameter to `/ai-analysis` endpoint (default: "claude")
+- Add `/ai-analysis/compare` endpoint that runs both Claude and Grok
+
+**Frontend Changes:**
+- Update `AIAnalysisButton.tsx` to allow provider selection
+- Update `AIAnalysis.tsx` to show side-by-side comparison when both analyses exist
+- Add "Run Grok Analysis" option on game detail page
+
+**Database:**
+- `ai_analysis` table already has `ai_provider` column - no schema changes needed
+
+**Environment Variables:**
+- Add `GROK_API_KEY` to Railway
+
+**Estimated Work:**
+- Backend: Update ai_service.py with Grok client
+- Backend: Add provider param to endpoint
+- Frontend: Add provider toggle/button
+- Frontend: Side-by-side analysis display
+- Deploy and test
+
+---
+
+### Phase 2: Haslametrics Integration
+
+**Goal:** Add Haslametrics advanced metrics alongside KenPom.
+
+**Challenge:** No public API - requires Selenium scraping like KenPom.
+
+**Backend Changes (`backend/data_collection/haslametrics_scraper.py`):**
+```python
+# New file: Haslametrics scraper
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+import time
+
+def scrape_haslametrics(season: int = 2025) -> list[dict]:
+    """
+    Scrapes Haslametrics ratings.
+    URL: https://haslametrics.com/ratings.php
+
+    Key metrics to capture:
+    - Team ranking
+    - Predictive rating
+    - True tempo
+    - Offensive efficiency
+    - Defensive efficiency
+    - Recent form rating
+    - Strength of schedule
+    """
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.get("https://haslametrics.com/ratings.php")
+
+    # Wait for table to load
+    time.sleep(2)
+
+    # Parse ratings table
+    rows = driver.find_elements(By.CSS_SELECTOR, "table.ratings tbody tr")
+    ratings = []
+    for row in rows:
+        cols = row.find_elements(By.TAG_NAME, "td")
+        ratings.append({
+            "rank": int(cols[0].text),
+            "team": cols[1].text,
+            "predictive_rating": float(cols[2].text),
+            # ... more fields
+        })
+
+    driver.quit()
+    return ratings
+```
+
+**Database Schema:**
+```sql
+-- New migration: supabase/migrations/20250121000000_haslametrics_ratings.sql
+CREATE TABLE haslametrics_ratings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id UUID REFERENCES teams(id),
+    season INTEGER NOT NULL,
+    rank INTEGER,
+    predictive_rating DECIMAL(6,2),
+    true_tempo DECIMAL(4,1),
+    offensive_efficiency DECIMAL(5,1),
+    defensive_efficiency DECIMAL(5,1),
+    recent_form DECIMAL(4,2),
+    sos_rank INTEGER,
+    captured_at TIMESTAMPTZ DEFAULT NOW(),
+    captured_date DATE DEFAULT CURRENT_DATE,
+    UNIQUE(team_id, season, captured_date)
+);
+
+CREATE INDEX idx_haslametrics_team_season ON haslametrics_ratings(team_id, season);
+```
+
+**AI Analysis Enhancement:**
+- Update `build_analysis_prompt()` to include Haslametrics when available
+- Add predictive rating differential to prompt
+- Include recent form in context
+
+**Frontend Changes:**
+- Add Haslametrics panel to game detail page (similar to KenPom panel)
+- Show predictive rating comparison
+
+**Daily Refresh:**
+- Add `refresh_haslametrics()` to daily pipeline
+- Run after KenPom refresh (both use Selenium)
+
+**Estimated Work:**
+1. Create Selenium scraper for Haslametrics
+2. Create database migration
+3. Update TypeScript types
+4. Update AI prompt with Haslametrics data
+5. Add Haslametrics panel to game detail page
+6. Add to daily refresh pipeline
+7. Test and deploy
+
+---
+
+### Implementation Order
+
+1. **Grok (simpler, faster win):**
+   - Has official API (OpenAI-compatible)
+   - Database already supports multiple providers
+   - Can be deployed incrementally
+
+2. **Haslametrics (more complex):**
+   - Requires Selenium scraping
+   - New database table needed
+   - More testing required
+   - Can run in parallel with KenPom scraper
+
+### Prerequisites
+
+- Grok API key (from x.ai)
+- Haslametrics is free (no login required)
+- Chrome/Chromium for Selenium on Railway
 
 ## Troubleshooting
 
