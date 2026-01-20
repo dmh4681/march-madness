@@ -18,6 +18,7 @@ from .supabase_client import (
     get_game_by_id,
     get_latest_spread,
     get_team_ranking,
+    get_team_kenpom,
     insert_ai_analysis,
 )
 
@@ -51,6 +52,14 @@ def build_game_context(game_id: str) -> dict:
     if game.get("away_team_id"):
         away_ranking = get_team_ranking(game["away_team_id"], game["season"])
 
+    # Get KenPom ratings
+    home_kenpom = None
+    away_kenpom = None
+    if game.get("home_team_id"):
+        home_kenpom = get_team_kenpom(game["home_team_id"], game["season"])
+    if game.get("away_team_id"):
+        away_kenpom = get_team_kenpom(game["away_team_id"], game["season"])
+
     return {
         "game_id": game_id,
         "date": game.get("date"),
@@ -68,6 +77,9 @@ def build_game_context(game_id: str) -> dict:
         "home_ml": spread.get("home_ml") if spread else None,
         "away_ml": spread.get("away_ml") if spread else None,
         "total": spread.get("over_under") if spread else None,
+        # KenPom data
+        "home_kenpom": home_kenpom,
+        "away_kenpom": away_kenpom,
     }
 
 
@@ -88,7 +100,54 @@ def build_analysis_prompt(context: dict) -> str:
     if context["home_ml"] and context["away_ml"]:
         ml_str = f"ML: {context['home_team']} {context['home_ml']:+d} / {context['away_team']} {context['away_ml']:+d}"
 
-    prompt = f"""You are an expert college basketball betting analyst. Analyze this matchup and provide betting recommendations.
+    # Build KenPom section if data is available
+    kenpom_section = ""
+    home_kp = context.get("home_kenpom")
+    away_kp = context.get("away_kenpom")
+
+    if home_kp or away_kp:
+        kenpom_section = "\n## KENPOM ADVANCED ANALYTICS\n"
+
+        if home_kp:
+            kenpom_section += f"""
+**{context['home_team']}** (KenPom #{home_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {home_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {home_kp.get('adj_offense', 'N/A')} (#{home_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {home_kp.get('adj_defense', 'N/A')} (#{home_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {home_kp.get('adj_tempo', 'N/A')} (#{home_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {home_kp.get('sos_adj_em', 'N/A')} (#{home_kp.get('sos_adj_em_rank', 'N/A')})
+- Luck: {home_kp.get('luck', 'N/A')} (#{home_kp.get('luck_rank', 'N/A')})
+- Record: {home_kp.get('wins', 0)}-{home_kp.get('losses', 0)}
+"""
+
+        if away_kp:
+            kenpom_section += f"""
+**{context['away_team']}** (KenPom #{away_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {away_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {away_kp.get('adj_offense', 'N/A')} (#{away_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {away_kp.get('adj_defense', 'N/A')} (#{away_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {away_kp.get('adj_tempo', 'N/A')} (#{away_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {away_kp.get('sos_adj_em', 'N/A')} (#{away_kp.get('sos_adj_em_rank', 'N/A')})
+- Luck: {away_kp.get('luck', 'N/A')} (#{away_kp.get('luck_rank', 'N/A')})
+- Record: {away_kp.get('wins', 0)}-{away_kp.get('losses', 0)}
+"""
+
+    # Build analysis considerations based on available data
+    analysis_points = """1. Ranking differential and what it implies about team quality
+2. Home court advantage (if applicable)
+3. Conference game dynamics (teams know each other well)
+4. Historical patterns for similar matchups (ranked vs unranked, etc.)
+5. Line value - is the spread accurate?"""
+
+    if home_kp or away_kp:
+        analysis_points = """1. KenPom efficiency differentials (AdjO vs opponent AdjD matchups)
+2. Tempo implications (fast vs slow matchup, how it affects total)
+3. Strength of schedule context (are records inflated/deflated?)
+4. Luck factor - teams with high luck may regress
+5. Home court advantage (typically worth ~3.5 points)
+6. Line value - does the spread align with KenPom predicted margin?"""
+
+    prompt = f"""You are an expert college basketball betting analyst with deep knowledge of advanced analytics. Analyze this matchup and provide betting recommendations.
 
 ## MATCHUP
 **{context['away_team']}** ({away_rank_str}) @ **{context['home_team']}** ({home_rank_str})
@@ -100,7 +159,7 @@ Venue: {context['venue'] or 'TBD'}
 Spread: {spread_str or 'Not available'}
 {ml_str}
 Total: O/U {context['total'] or 'N/A'}
-
+{kenpom_section}
 ## CONTEXT
 - Conference Game: {'Yes' if context['is_conference_game'] else 'No'}
 - Same Conference: {'Yes' if context['home_conference'] == context['away_conference'] else 'No'}
@@ -109,11 +168,7 @@ Total: O/U {context['total'] or 'N/A'}
 ## YOUR ANALYSIS TASK
 
 Provide a concise betting analysis. Consider:
-1. Ranking differential and what it implies about team quality
-2. Home court advantage (if applicable)
-3. Conference game dynamics (teams know each other well)
-4. Historical patterns for similar matchups (ranked vs unranked, etc.)
-5. Line value - is the spread accurate?
+{analysis_points}
 
 ## REQUIRED OUTPUT FORMAT
 
@@ -130,6 +185,7 @@ Important guidelines:
 - If no clear edge exists, recommend "pass"
 - confidence_score should reflect your certainty (0.5 = coin flip, 0.8+ = strong conviction)
 - Be specific about WHY you see value, not just team quality
+- When KenPom data is available, use efficiency margins to estimate expected point differential
 
 Respond with ONLY the JSON object, no additional text."""
 

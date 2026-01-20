@@ -12,7 +12,8 @@
 | Backend API | FastAPI, Python 3.11 | Railway |
 | Database | PostgreSQL via Supabase | Supabase |
 | AI Analysis | Claude API (Anthropic) | Via Railway backend |
-| Data Sources | The Odds API, CBBpy | APIs |
+| Data Sources | The Odds API, CBBpy, KenPom | APIs |
+| Advanced Analytics | KenPom (kenpompy) | Via Railway backend |
 
 ## Project Structure
 
@@ -46,6 +47,7 @@ march-madness/
 │   │   └── ai_service.py       # Claude/Grok integration
 │   ├── data_collection/
 │   │   ├── daily_refresh.py    # Daily data pipeline
+│   │   ├── kenpom_scraper.py   # KenPom advanced analytics
 │   │   ├── migrate_to_supabase.py  # Data migration
 │   │   ├── scraper.py          # CBBpy data collection
 │   │   └── rankings.py         # AP rankings scraper
@@ -57,7 +59,8 @@ march-madness/
 ├── supabase/
 │   └── migrations/             # SQL schema files
 │       ├── 20250118000000_initial_schema.sql
-│       └── 20250118000001_today_games_view.sql
+│       ├── 20250118000001_today_games_view.sql
+│       └── 20250119000000_kenpom_ratings.sql
 │
 ├── .github/
 │   └── workflows/
@@ -94,10 +97,12 @@ march-madness/
 - `predictions` - Model predictions per game
 - `ai_analysis` - Claude/Grok analysis results
 - `bet_results` - Tracking actual bet outcomes
+- `kenpom_ratings` - KenPom advanced analytics (AdjO, AdjD, tempo, SOS, etc.)
 
 **Views:**
 - `today_games` - Today's games with all joined data
 - `upcoming_games` - Next 7 days of games
+- `latest_kenpom_ratings` - Most recent KenPom data per team
 
 ## Environment Variables
 
@@ -117,6 +122,10 @@ GROK_API_KEY= (optional)
 ODDS_API_KEY=
 REFRESH_API_KEY= (optional, for cron auth)
 ALLOWED_ORIGINS=https://your-vercel-app.vercel.app
+
+# KenPom Integration (requires subscription)
+KENPOM_EMAIL=
+KENPOM_PASSWORD=
 ```
 
 ## Development Commands
@@ -145,9 +154,10 @@ python -m backend.data_collection.daily_refresh
 1. **Daily at 6 AM EST** - GitHub Actions triggers `/refresh`
 2. **Refresh Pipeline:**
    - Fetches spreads from The Odds API
+   - Refreshes KenPom advanced analytics (if credentials configured)
    - Creates/updates games in Supabase
    - Runs predictions on upcoming games
-   - Runs Claude AI analysis on today's games
+   - Runs Claude AI analysis on today's games (includes KenPom data)
 3. **Frontend** reads from Supabase views
 4. **Users** can trigger AI analysis on-demand via button
 
@@ -156,9 +166,26 @@ python -m backend.data_collection.daily_refresh
 The AI service (`backend/api/ai_service.py`) uses Claude to analyze games:
 
 - Builds context with team rankings, spread, venue, conference
+- **Includes KenPom data when available:** AdjO, AdjD, efficiency margin, tempo, SOS, luck
 - Sends structured prompt asking for betting recommendation
+- When KenPom data is present, prompts Claude to use efficiency differentials for spread predictions
 - Parses JSON response with: recommended_bet, confidence_score, key_factors, reasoning
 - Stores analysis in `ai_analysis` table
+
+### KenPom Integration
+
+The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpompy` library:
+
+- Requires KenPom subscription credentials (KENPOM_EMAIL, KENPOM_PASSWORD)
+- Fetches all 350+ team ratings including:
+  - Adjusted Offensive Efficiency (AdjO)
+  - Adjusted Defensive Efficiency (AdjD)
+  - Adjusted Efficiency Margin (AdjEM = AdjO - AdjD)
+  - Adjusted Tempo
+  - Strength of Schedule
+  - Luck factor
+- Stores in `kenpom_ratings` table with daily snapshots
+- AI analysis prompt is enhanced when KenPom data is available
 
 ## Current Status
 
@@ -167,6 +194,8 @@ The AI service (`backend/api/ai_service.py`) uses Claude to analyze games:
 - Game detail pages with AI analysis
 - "Run AI Analysis" button on game pages
 - Daily refresh pipeline (GitHub Actions)
+- KenPom advanced analytics integration
+- AI analysis enhanced with KenPom data
 - Performance tracking page (demo data)
 - March Madness preview page
 
@@ -176,6 +205,7 @@ The AI service (`backend/api/ai_service.py`) uses Claude to analyze games:
 - Custom domain
 - Bet result tracking
 - Email notifications for high-confidence picks
+- Haslametrics integration (no API, requires Selenium)
 - Mobile app
 
 ## Common Tasks

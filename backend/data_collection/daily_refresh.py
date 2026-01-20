@@ -404,6 +404,33 @@ def create_today_games_view() -> dict:
     return {"today_games": len(result.data)}
 
 
+def refresh_kenpom_data() -> dict:
+    """Refresh KenPom advanced analytics data."""
+    print("\n=== Refreshing KenPom Data ===")
+
+    try:
+        from .kenpom_scraper import refresh_kenpom_data as kenpom_refresh
+
+        # Check if we have credentials
+        kenpom_email = os.getenv("KENPOM_EMAIL")
+        kenpom_password = os.getenv("KENPOM_PASSWORD")
+
+        if not kenpom_email or not kenpom_password:
+            print("KenPom credentials not configured, skipping")
+            return {"status": "skipped", "reason": "no_credentials"}
+
+        # Run the KenPom refresh
+        results = kenpom_refresh(season=2025)
+        return results
+
+    except ImportError as e:
+        print(f"KenPom scraper import error: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        print(f"Error refreshing KenPom data: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
@@ -471,19 +498,27 @@ def run_daily_refresh() -> dict:
             odds_results = process_odds_data(odds_data)
             results["odds"] = odds_results
 
-        # 2. Run predictions on upcoming games
+        # 2. Refresh KenPom advanced analytics (once daily)
+        try:
+            kenpom_results = refresh_kenpom_data()
+            results["kenpom"] = kenpom_results
+        except Exception as e:
+            print(f"KenPom refresh error (non-fatal): {e}")
+            results["kenpom"] = {"error": str(e)}
+
+        # 3. Run predictions on upcoming games
         prediction_results = run_predictions()
         results["predictions"] = prediction_results
 
-        # 3. Update completed game results
+        # 4. Update completed game results
         score_results = update_game_results()
         results["scores"] = score_results
 
-        # 4. Create today's view
+        # 5. Create today's view
         view_results = create_today_games_view()
         results["today"] = view_results
 
-        # 5. Run AI analysis on today's games
+        # 6. Run AI analysis on today's games (uses KenPom data if available)
         try:
             ai_results = run_ai_analysis()
             results["ai_analysis"] = ai_results
