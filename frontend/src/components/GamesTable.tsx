@@ -18,6 +18,9 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
     );
   }
 
+  // Check if any game has moneyline data
+  const hasAnyMoneylines = games.some(g => g.home_ml !== null || g.away_ml !== null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -26,7 +29,7 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
             <th className="py-3 px-2 font-medium">Matchup</th>
             <th className="py-3 px-2 font-medium text-center">Spread</th>
             <th className="py-3 px-2 font-medium text-center">O/U</th>
-            <th className="py-3 px-2 font-medium text-center">ML</th>
+            {hasAnyMoneylines && <th className="py-3 px-2 font-medium text-center">ML</th>}
             <th className="py-3 px-2 font-medium text-center">Pick</th>
             <th className="py-3 px-2 font-medium text-center">Conf</th>
             <th className="py-3 px-2 font-medium text-center">Edge</th>
@@ -34,7 +37,7 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
         </thead>
         <tbody>
           {games.map((game) => (
-            <GameRow key={game.id} game={game} />
+            <GameRow key={game.id} game={game} showMoneyline={hasAnyMoneylines} />
           ))}
         </tbody>
       </table>
@@ -42,7 +45,7 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
   );
 }
 
-function GameRow({ game }: { game: TodayGame }) {
+function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneyline?: boolean }) {
   const getConfidenceStyle = (tier: string | null) => {
     switch (tier) {
       case 'high':
@@ -110,17 +113,19 @@ function GameRow({ game }: { game: TodayGame }) {
         {game.over_under || '-'}
       </td>
 
-      {/* Moneyline */}
-      <td className="py-3 px-2 text-center">
-        <div className="flex flex-col text-xs">
-          <span className={game.away_ml && game.away_ml > 0 ? 'text-green-400' : 'text-gray-400'}>
-            {formatMoneyline(game.away_ml)}
-          </span>
-          <span className={game.home_ml && game.home_ml > 0 ? 'text-green-400' : 'text-gray-400'}>
-            {formatMoneyline(game.home_ml)}
-          </span>
-        </div>
-      </td>
+      {/* Moneyline - only show if any game has ML data */}
+      {showMoneyline && (
+        <td className="py-3 px-2 text-center">
+          <div className="flex flex-col text-xs">
+            <span className={game.away_ml && game.away_ml > 0 ? 'text-green-400' : 'text-gray-400'}>
+              {formatMoneyline(game.away_ml)}
+            </span>
+            <span className={game.home_ml && game.home_ml > 0 ? 'text-green-400' : 'text-gray-400'}>
+              {formatMoneyline(game.home_ml)}
+            </span>
+          </div>
+        </td>
+      )}
 
       {/* Pick */}
       <td className="py-3 px-2 text-center">
