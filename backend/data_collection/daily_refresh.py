@@ -298,12 +298,32 @@ def fetch_cbbpy_games() -> list[dict]:
         return []
 
 
-def run_predictions() -> dict:
-    """Run predictions on upcoming games."""
+def run_predictions(force_regenerate: bool = False) -> dict:
+    """Run predictions on upcoming games.
+
+    Args:
+        force_regenerate: If True, delete existing predictions and regenerate all
+    """
     print("\n=== Running Predictions ===")
 
     # Get upcoming games without predictions
     today = date.today().isoformat()
+
+    # If force regenerate, delete all predictions for upcoming games first
+    if force_regenerate:
+        print("Force regenerate enabled - deleting existing predictions for upcoming games...")
+        delete_result = supabase.table("predictions").delete().gte(
+            "game_id",
+            supabase.table("games").select("id").gte("date", today).is_("home_score", "null")
+        ).execute()
+        # Actually, the above won't work with supabase-py. Let's do it differently:
+        # Get all upcoming game IDs first
+        upcoming = supabase.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
+        if upcoming.data:
+            game_ids = [g["id"] for g in upcoming.data]
+            for gid in game_ids:
+                supabase.table("predictions").delete().eq("game_id", gid).execute()
+            print(f"  Deleted predictions for {len(game_ids)} games")
 
     result = supabase.table("games").select(
         "id, date, home_team_id, away_team_id, is_conference_game"
@@ -320,10 +340,11 @@ def run_predictions() -> dict:
 
     for game in games:
         try:
-            # Check if prediction already exists
-            existing = supabase.table("predictions").select("id").eq("game_id", game["id"]).execute()
-            if existing.data:
-                continue
+            # Check if prediction already exists (skip if not force regenerating)
+            if not force_regenerate:
+                existing = supabase.table("predictions").select("id").eq("game_id", game["id"]).execute()
+                if existing.data:
+                    continue
 
             # Get latest spread for this game
             spread_result = supabase.table("spreads").select("home_spread").eq("game_id", game["id"]).order("captured_at", desc=True).limit(1).execute()
@@ -511,11 +532,17 @@ def run_ai_analysis() -> dict:
     return {"analyses_created": analyses_created, "errors": errors}
 
 
-def run_daily_refresh() -> dict:
-    """Run the complete daily refresh pipeline."""
+def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
+    """Run the complete daily refresh pipeline.
+
+    Args:
+        force_regenerate_predictions: If True, delete and regenerate all predictions
+    """
     print("=" * 60)
     print("Conference Contrarian - Daily Data Refresh")
     print(f"Started at: {datetime.now().isoformat()}")
+    if force_regenerate_predictions:
+        print("*** FORCE REGENERATE PREDICTIONS ENABLED ***")
     print("=" * 60)
 
     results = {
@@ -539,7 +566,7 @@ def run_daily_refresh() -> dict:
             results["kenpom"] = {"error": str(e)}
 
         # 3. Run predictions on upcoming games
-        prediction_results = run_predictions()
+        prediction_results = run_predictions(force_regenerate=force_regenerate_predictions)
         results["predictions"] = prediction_results
 
         # 4. Update completed game results

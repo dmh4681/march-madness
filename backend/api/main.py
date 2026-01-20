@@ -400,12 +400,18 @@ def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
 
 
 @app.post("/refresh")
-def refresh_data(api_key: Optional[str] = None):
+def refresh_data(
+    api_key: Optional[str] = None,
+    force_regenerate: bool = False
+):
     """
     Trigger a data refresh (games, spreads, rankings).
 
     This endpoint should be called by a cron job or manually.
-    Optionally pass api_key for authentication.
+
+    Query params:
+    - api_key: Optional authentication key
+    - force_regenerate: If true, delete and regenerate all predictions
     """
     # Simple API key check (only if REFRESH_API_KEY is set in environment)
     expected_key = os.getenv("REFRESH_API_KEY")
@@ -416,7 +422,7 @@ def refresh_data(api_key: Optional[str] = None):
     try:
         from ..data_collection.daily_refresh import run_daily_refresh
 
-        results = run_daily_refresh()
+        results = run_daily_refresh(force_regenerate_predictions=force_regenerate)
 
         return {
             "status": results.get("status", "success"),
