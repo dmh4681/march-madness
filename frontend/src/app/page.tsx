@@ -1,8 +1,8 @@
 import { format } from 'date-fns';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { TodayGame, DashboardStats } from '@/lib/types';
-import { GameCard } from '@/components/GameCard';
 import { PicksList, StatsCard } from '@/components/PicksList';
+import { GamesSection } from '@/components/GamesSection';
 
 // Demo data for when Supabase isn't configured
 const DEMO_GAMES: TodayGame[] = [
@@ -253,39 +253,7 @@ export default async function Dashboard() {
 
           {/* Right Column - All Games */}
           <div className="lg:col-span-2">
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">
-                  Today&apos;s Games
-                </h2>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs px-2 py-1 bg-green-500/20 text-green-400 rounded">
-                    🔥 HIGH
-                  </span>
-                  <span className="text-xs px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded">
-                    ⚡ MED
-                  </span>
-                  <span className="text-xs px-2 py-1 bg-orange-500/20 text-orange-400 rounded">
-                    📊 LOW
-                  </span>
-                </div>
-              </div>
-
-              {games.length === 0 ? (
-                <div className="text-center py-12 text-gray-400">
-                  <p className="text-lg mb-2">No games scheduled for today</p>
-                  <p className="text-sm">
-                    Check back tomorrow or view upcoming games
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {games.map((game) => (
-                    <GameCard key={game.id} game={game} />
-                  ))}
-                </div>
-              )}
-            </div>
+            <GamesSection games={games} />
           </div>
         </div>
       </main>
