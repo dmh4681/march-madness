@@ -252,7 +252,7 @@ def analyze_with_grok(context: dict) -> dict:
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
     response = grok_client.chat.completions.create(
-        model="grok-2-latest",  # or grok-beta depending on access
+        model="grok-3",
         messages=[
             {"role": "user", "content": prompt}
         ],
@@ -279,7 +279,7 @@ def analyze_with_grok(context: dict) -> dict:
 
     return {
         "ai_provider": "grok",
-        "model_used": "grok-2-latest",
+        "model_used": "grok-3",
         "analysis_type": "matchup",
         "prompt_hash": prompt_hash,
         "response": response_text,
