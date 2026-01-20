@@ -23,6 +23,9 @@ export function AIAnalysisButton({
     setSuccess(false);
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+
       const response = await fetch(`${apiUrl}/ai-analysis`, {
         method: 'POST',
         headers: {
@@ -32,11 +35,36 @@ export function AIAnalysisButton({
           game_id: gameId,
           provider: 'claude',
         }),
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
+
+      // Read response text first to handle empty responses
+      const text = await response.text();
+
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.detail || 'Failed to run analysis');
+        let errorMessage = 'Failed to run analysis';
+        if (text) {
+          try {
+            const data = JSON.parse(text);
+            errorMessage = data.detail || errorMessage;
+          } catch {
+            errorMessage = text || errorMessage;
+          }
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Verify we got valid JSON back
+      if (!text) {
+        throw new Error('Empty response from server');
+      }
+
+      try {
+        JSON.parse(text); // Validate JSON
+      } catch {
+        throw new Error('Invalid response format');
       }
 
       setSuccess(true);
@@ -45,7 +73,11 @@ export function AIAnalysisButton({
         window.location.reload();
       }, 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError('Request timed out. The analysis is taking too long.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Unknown error');
+      }
     } finally {
       setLoading(false);
     }
