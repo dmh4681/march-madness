@@ -504,7 +504,8 @@ def regenerate_predictions():
     try:
         from ..data_collection.daily_refresh import run_predictions
 
-        results = run_predictions(force_regenerate=True)
+        # Don't use force_regenerate - just create predictions for games that don't have them
+        results = run_predictions(force_regenerate=False)
 
         return {
             "status": "success",
