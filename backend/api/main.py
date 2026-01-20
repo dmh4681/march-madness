@@ -495,6 +495,25 @@ def refresh_data(
         raise HTTPException(status_code=500, detail=f"Refresh failed: {str(e)}")
 
 
+@app.post("/regenerate-predictions")
+def regenerate_predictions():
+    """
+    Quick endpoint to regenerate predictions only (no odds/kenpom fetch).
+    Much faster than full /refresh.
+    """
+    try:
+        from ..data_collection.daily_refresh import run_predictions
+
+        results = run_predictions(force_regenerate=True)
+
+        return {
+            "status": "success",
+            "predictions_created": results.get("predictions_created", 0),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
+
+
 @app.get("/backtest")
 def backtest(
     start_date: str,
