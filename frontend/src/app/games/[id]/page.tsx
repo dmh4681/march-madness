@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, GameStatus } from '@/lib/types';
+import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, GameStatus, KenPomRating } from '@/lib/types';
 import { formatSpread, formatMoneyline, formatProbability } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AIAnalysisPanel } from '@/components/AIAnalysis';
@@ -91,6 +91,62 @@ const DEMO_GAME: GameWithDetails = {
     total_points: 1456,
     poll_type: 'ap',
     created_at: new Date().toISOString(),
+  },
+  home_kenpom: {
+    id: 'kp-1',
+    team_id: 'team-1',
+    season: 2025,
+    rank: 8,
+    adj_efficiency_margin: 26.54,
+    adj_offense: 121.3,
+    adj_offense_rank: 5,
+    adj_defense: 94.8,
+    adj_defense_rank: 12,
+    adj_tempo: 70.2,
+    adj_tempo_rank: 45,
+    luck: 0.024,
+    luck_rank: 112,
+    sos_adj_em: 8.42,
+    sos_adj_em_rank: 25,
+    sos_opp_offense: null,
+    sos_opp_offense_rank: null,
+    sos_opp_defense: null,
+    sos_opp_defense_rank: null,
+    ncsos_adj_em: null,
+    ncsos_adj_em_rank: null,
+    wins: 16,
+    losses: 3,
+    conference: 'ACC',
+    captured_at: new Date().toISOString(),
+    captured_date: new Date().toISOString().split('T')[0],
+  },
+  away_kenpom: {
+    id: 'kp-2',
+    team_id: 'team-2',
+    season: 2025,
+    rank: 6,
+    adj_efficiency_margin: 27.89,
+    adj_offense: 119.8,
+    adj_offense_rank: 8,
+    adj_defense: 91.9,
+    adj_defense_rank: 5,
+    adj_tempo: 72.1,
+    adj_tempo_rank: 28,
+    luck: -0.012,
+    luck_rank: 198,
+    sos_adj_em: 9.15,
+    sos_adj_em_rank: 18,
+    sos_opp_offense: null,
+    sos_opp_offense_rank: null,
+    sos_opp_defense: null,
+    sos_opp_defense_rank: null,
+    ncsos_adj_em: null,
+    ncsos_adj_em_rank: null,
+    wins: 17,
+    losses: 2,
+    conference: 'ACC',
+    captured_at: new Date().toISOString(),
+    captured_date: new Date().toISOString().split('T')[0],
   },
   prediction: {
     id: 'pred-1',
@@ -198,6 +254,34 @@ async function getGame(id: string): Promise<GameWithDetails | null> {
       awayRanking = data;
     }
 
+    // Fetch KenPom ratings
+    let homeKenpom = null;
+    let awayKenpom = null;
+
+    if (g.home_team_id) {
+      const { data } = await supabase
+        .from('kenpom_ratings')
+        .select('*')
+        .eq('team_id', g.home_team_id as string)
+        .eq('season', g.season as number)
+        .order('captured_at', { ascending: false })
+        .limit(1)
+        .single();
+      homeKenpom = data;
+    }
+
+    if (g.away_team_id) {
+      const { data } = await supabase
+        .from('kenpom_ratings')
+        .select('*')
+        .eq('team_id', g.away_team_id as string)
+        .eq('season', g.season as number)
+        .order('captured_at', { ascending: false })
+        .limit(1)
+        .single();
+      awayKenpom = data;
+    }
+
     // Fetch prediction
     const { data: prediction } = await supabase
       .from('predictions')
@@ -238,6 +322,8 @@ async function getGame(id: string): Promise<GameWithDetails | null> {
       latest_spread: spreads?.[0] ? (spreads[0] as unknown as Spread) : null,
       home_ranking: homeRanking ? (homeRanking as unknown as Ranking) : null,
       away_ranking: awayRanking ? (awayRanking as unknown as Ranking) : null,
+      home_kenpom: homeKenpom ? (homeKenpom as unknown as KenPomRating) : null,
+      away_kenpom: awayKenpom ? (awayKenpom as unknown as KenPomRating) : null,
       prediction: prediction ? (prediction as unknown as Prediction) : null,
       ai_analyses: aiAnalyses ? (aiAnalyses as unknown as AIAnalysis[]) : [],
     };
@@ -514,6 +600,144 @@ export default async function GameDetailPage({ params }: PageProps) {
                       {formatMoneyline(game.latest_spread.home_ml)}
                     </span>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {/* KenPom Analytics */}
+            {(game.home_kenpom || game.away_kenpom) && (
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">
+                  KenPom Analytics
+                </h3>
+                <div className="space-y-3">
+                  {/* KenPom Rank */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="text-right font-medium text-white">
+                      #{game.away_kenpom?.rank ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Rank</div>
+                    <div className="text-left font-medium text-white">
+                      #{game.home_kenpom?.rank ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Adj. Efficiency Margin */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_kenpom?.adj_efficiency_margin ?? 0) > (game.home_kenpom?.adj_efficiency_margin ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_kenpom?.adj_efficiency_margin?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">AdjEM</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_kenpom?.adj_efficiency_margin ?? 0) > (game.away_kenpom?.adj_efficiency_margin ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_kenpom?.adj_efficiency_margin?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Adj. Offense */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_kenpom?.adj_offense ?? 0) > (game.home_kenpom?.adj_offense ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_kenpom?.adj_offense?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">AdjO</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_kenpom?.adj_offense ?? 0) > (game.away_kenpom?.adj_offense ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_kenpom?.adj_offense?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Adj. Defense (lower is better) */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_kenpom?.adj_defense ?? 999) < (game.home_kenpom?.adj_defense ?? 999)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_kenpom?.adj_defense?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">AdjD</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_kenpom?.adj_defense ?? 999) < (game.away_kenpom?.adj_defense ?? 999)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_kenpom?.adj_defense?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Tempo */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="text-right font-medium text-white">
+                      {game.away_kenpom?.adj_tempo?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Tempo</div>
+                    <div className="text-left font-medium text-white">
+                      {game.home_kenpom?.adj_tempo?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* SOS */}
+                  {(game.home_kenpom?.sos_adj_em || game.away_kenpom?.sos_adj_em) && (
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div className={`text-right font-medium ${
+                        (game.away_kenpom?.sos_adj_em ?? 0) > (game.home_kenpom?.sos_adj_em ?? 0)
+                          ? 'text-green-400'
+                          : 'text-white'
+                      }`}>
+                        {game.away_kenpom?.sos_adj_em?.toFixed(1) ?? 'N/A'}
+                      </div>
+                      <div className="text-center text-gray-400">SOS</div>
+                      <div className={`text-left font-medium ${
+                        (game.home_kenpom?.sos_adj_em ?? 0) > (game.away_kenpom?.sos_adj_em ?? 0)
+                          ? 'text-green-400'
+                          : 'text-white'
+                      }`}>
+                        {game.home_kenpom?.sos_adj_em?.toFixed(1) ?? 'N/A'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Luck */}
+                  {(game.home_kenpom?.luck !== null || game.away_kenpom?.luck !== null) && (
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div className="text-right font-medium text-white">
+                        {game.away_kenpom?.luck?.toFixed(3) ?? 'N/A'}
+                      </div>
+                      <div className="text-center text-gray-400">Luck</div>
+                      <div className="text-left font-medium text-white">
+                        {game.home_kenpom?.luck?.toFixed(3) ?? 'N/A'}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Record */}
+                  <div className="grid grid-cols-3 gap-2 text-sm pt-2 border-t border-gray-800">
+                    <div className="text-right font-medium text-white">
+                      {game.away_kenpom?.wins ?? 0}-{game.away_kenpom?.losses ?? 0}
+                    </div>
+                    <div className="text-center text-gray-400">Record</div>
+                    <div className="text-left font-medium text-white">
+                      {game.home_kenpom?.wins ?? 0}-{game.home_kenpom?.losses ?? 0}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-xs text-gray-500 mt-4 text-center">
+                  Data from KenPom.com
                 </div>
               </div>
             )}

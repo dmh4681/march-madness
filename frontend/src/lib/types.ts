@@ -174,6 +174,36 @@ export interface BetResult {
 export type BetType = 'spread' | 'ml' | 'over' | 'under';
 export type BetResultStatus = 'win' | 'loss' | 'push' | 'pending';
 
+// KenPom Advanced Analytics
+export interface KenPomRating {
+  id: string;
+  team_id: string;
+  season: number;
+  rank: number | null;
+  adj_efficiency_margin: number | null;
+  adj_offense: number | null;
+  adj_offense_rank: number | null;
+  adj_defense: number | null;
+  adj_defense_rank: number | null;
+  adj_tempo: number | null;
+  adj_tempo_rank: number | null;
+  luck: number | null;
+  luck_rank: number | null;
+  sos_adj_em: number | null;
+  sos_adj_em_rank: number | null;
+  sos_opp_offense: number | null;
+  sos_opp_offense_rank: number | null;
+  sos_opp_defense: number | null;
+  sos_opp_defense_rank: number | null;
+  ncsos_adj_em: number | null;
+  ncsos_adj_em_rank: number | null;
+  wins: number | null;
+  losses: number | null;
+  conference: string | null;
+  captured_at: string;
+  captured_date: string;
+}
+
 // View types
 export interface TodayGame {
   id: string;
@@ -215,6 +245,8 @@ export interface GameWithDetails extends Game {
   latest_spread: Spread | null;
   home_ranking: Ranking | null;
   away_ranking: Ranking | null;
+  home_kenpom: KenPomRating | null;
+  away_kenpom: KenPomRating | null;
   prediction: Prediction | null;
   ai_analyses: AIAnalysis[];
 }

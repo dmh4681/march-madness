@@ -113,6 +113,8 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_API_URL=https://web-production-e5efb.up.railway.app
 ```
 
+**IMPORTANT:** `NEXT_PUBLIC_API_URL` must include `https://` - without it, fetch requests will fail with 405 errors.
+
 ### Backend (Railway)
 ```
 SUPABASE_URL=
@@ -231,3 +233,18 @@ The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpo
 - The Odds API free tier: 500 requests/month
 - Railway auto-deploys on git push
 - Vercel auto-deploys on git push
+- KenPom requires paid subscription - scraper uses browser automation via Selenium
+
+## Troubleshooting
+
+### 405 Method Not Allowed on AI Analysis
+- Check that `NEXT_PUBLIC_API_URL` in Vercel includes `https://`
+- Check that `ALLOWED_ORIGINS` in Railway includes your exact Vercel URL
+
+### KenPom data all NULL
+- Ensure using `get_pomeroy_ratings()` not `get_efficiency()` in kenpom_scraper.py
+- Check Railway logs for actual column names returned by kenpompy
+
+### React Hydration Error #418
+- Usually caused by `new Date()` in server components (different on server vs client)
+- Use static dates or move date logic to client components

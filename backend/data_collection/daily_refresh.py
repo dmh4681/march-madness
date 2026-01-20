@@ -197,18 +197,39 @@ def process_odds_data(odds_data: list[dict]) -> dict:
             away_ml = None
             over_under = None
 
+            # Helper to match team names flexibly
+            def teams_match(api_name: str, target_name: str) -> bool:
+                if not api_name or not target_name:
+                    return False
+                # Exact match
+                if api_name == target_name:
+                    return True
+                # Normalize both names for comparison
+                api_lower = api_name.lower()
+                target_lower = target_name.lower()
+                # Check if one contains the other (e.g., "Duke Blue Devils" contains "Duke")
+                if api_lower in target_lower or target_lower in api_lower:
+                    return True
+                # Check first word match (school name)
+                api_first = api_lower.split()[0] if api_lower.split() else ""
+                target_first = target_lower.split()[0] if target_lower.split() else ""
+                if api_first and target_first and api_first == target_first:
+                    return True
+                return False
+
             for bookmaker in game.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
                     if market.get("key") == "spreads":
                         for outcome in market.get("outcomes", []):
-                            if outcome.get("name") == home_team:
+                            if teams_match(outcome.get("name"), home_team):
                                 home_spread = outcome.get("point")
 
                     elif market.get("key") == "h2h":
                         for outcome in market.get("outcomes", []):
-                            if outcome.get("name") == home_team:
+                            outcome_name = outcome.get("name", "")
+                            if teams_match(outcome_name, home_team):
                                 home_ml = outcome.get("price")
-                            elif outcome.get("name") == away_team:
+                            elif teams_match(outcome_name, away_team):
                                 away_ml = outcome.get("price")
 
                     elif market.get("key") == "totals":
@@ -317,19 +338,27 @@ def run_predictions() -> dict:
             edge_pct = None
 
             if spread is not None:
-                # Basic heuristic: home teams slightly favored to cover
+                # Base adjustment for home court advantage
+                home_cover_prob = 0.52  # Slight home edge baseline
+
+                # Conference games have stronger home edge
                 if game.get("is_conference_game"):
-                    home_cover_prob = 0.52  # Slight home edge in conference
-                    if abs(spread) > 10:
-                        # Big favorites less likely to cover
-                        home_cover_prob = 0.48
-                    elif abs(spread) < 3:
-                        # Close games, home edge
-                        home_cover_prob = 0.54
+                    home_cover_prob = 0.53
+
+                # Adjust based on spread magnitude
+                if abs(spread) > 10:
+                    # Big favorites less likely to cover
+                    home_cover_prob = 0.48 if spread < 0 else 0.52
+                elif abs(spread) < 3:
+                    # Close games, home edge more valuable
+                    home_cover_prob = 0.55 if spread < 0 else 0.54
+                elif abs(spread) >= 3 and abs(spread) <= 7:
+                    # Sweet spot for home favorites
+                    home_cover_prob = 0.54 if spread < 0 else 0.52
 
                 # Determine confidence
                 edge = abs(home_cover_prob - 0.5) * 100
-                if edge > 5:
+                if edge > 4:
                     confidence_tier = "high"
                     edge_pct = edge
                     recommended_bet = "home_spread" if home_cover_prob > 0.5 else "away_spread"
@@ -337,6 +366,9 @@ def run_predictions() -> dict:
                     confidence_tier = "medium"
                     edge_pct = edge
                     recommended_bet = "home_spread" if home_cover_prob > 0.5 else "away_spread"
+                else:
+                    confidence_tier = "low"
+                    edge_pct = edge
 
             # Insert prediction
             prediction_data = {
