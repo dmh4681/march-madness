@@ -43,15 +43,25 @@ export function AIAnalysisButton({
       // Read response text first to handle empty responses
       const text = await response.text();
 
+      // Log for debugging
+      console.log('AI Analysis Response:', {
+        status: response.status,
+        statusText: response.statusText,
+        textLength: text?.length || 0,
+        textPreview: text?.substring(0, 200),
+      });
+
       if (!response.ok) {
-        let errorMessage = 'Failed to run analysis';
+        let errorMessage = `Failed (${response.status}): `;
         if (text) {
           try {
             const data = JSON.parse(text);
-            errorMessage = data.detail || errorMessage;
+            errorMessage += data.detail || text.substring(0, 100);
           } catch {
-            errorMessage = text || errorMessage;
+            errorMessage += text.substring(0, 100) || 'Unknown error';
           }
+        } else {
+          errorMessage += 'Empty response';
         }
         throw new Error(errorMessage);
       }
