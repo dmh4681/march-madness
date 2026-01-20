@@ -484,19 +484,17 @@ export default async function GameDetailPage({ params }: PageProps) {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left Column - Prediction */}
           <div className="space-y-6">
-            {/* Model Prediction */}
+            {/* Model Stats - Quick baseline metrics */}
             <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">
-                Model Prediction
+              <h3 className="text-lg font-semibold text-white mb-1">
+                Quick Stats
               </h3>
+              <p className="text-xs text-gray-500 mb-4">
+                Baseline model {game.ai_analyses.length > 0 && '(see AI Analysis for detailed pick)'}
+              </p>
 
               {game.prediction ? (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-400">Confidence</span>
-                    <ConfidenceBadge tier={game.prediction.confidence_tier} />
-                  </div>
-
                   <div className="flex items-center justify-between">
                     <span className="text-gray-400">Home Cover Prob</span>
                     <span className="text-white font-medium">
@@ -535,12 +533,13 @@ export default async function GameDetailPage({ params }: PageProps) {
                     </div>
                   )}
 
-                  {/* Recommendation */}
-                  {game.prediction.recommended_bet &&
+                  {/* Only show baseline recommendation if no AI analysis exists */}
+                  {game.ai_analyses.length === 0 &&
+                    game.prediction.recommended_bet &&
                     game.prediction.recommended_bet !== 'pass' && (
-                      <div className="mt-4 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
-                        <div className="text-sm text-green-400 font-medium mb-1">
-                          Recommended Bet
+                      <div className="mt-4 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                        <div className="text-sm text-blue-400 font-medium mb-1">
+                          Baseline Pick
                         </div>
                         <div className="text-white font-semibold">
                           {game.prediction.recommended_bet.includes('home')
@@ -558,8 +557,7 @@ export default async function GameDetailPage({ params }: PageProps) {
                     )}
 
                   <div className="text-xs text-gray-500 pt-2 border-t border-gray-800">
-                    Model: {game.prediction.model_name} v
-                    {game.prediction.model_version}
+                    Model: {game.prediction.model_name}
                   </div>
                 </div>
               ) : (
