@@ -240,6 +240,12 @@ def predict(request: PredictRequest):
         )
 
 
+@app.get("/ai-analysis")
+def ai_analysis_get():
+    """Debug endpoint - if you see this, the request was GET not POST."""
+    return {"error": "This endpoint requires POST method", "method_received": "GET"}
+
+
 @app.post("/ai-analysis", response_model=AIAnalysisResponse)
 def ai_analysis(request: AIAnalysisRequest):
     """

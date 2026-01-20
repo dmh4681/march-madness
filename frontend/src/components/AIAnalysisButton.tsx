@@ -26,15 +26,24 @@ export function AIAnalysisButton({
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
 
-      const response = await fetch(`${apiUrl}/ai-analysis`, {
+      const requestUrl = `${apiUrl}/ai-analysis`;
+      const requestBody = JSON.stringify({
+        game_id: gameId,
+        provider: 'claude',
+      });
+
+      console.log('Making request to:', requestUrl);
+      console.log('Request body:', requestBody);
+
+      const response = await fetch(requestUrl, {
         method: 'POST',
+        mode: 'cors',
+        cache: 'no-cache',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          game_id: gameId,
-          provider: 'claude',
-        }),
+        body: requestBody,
         signal: controller.signal,
       });
 
