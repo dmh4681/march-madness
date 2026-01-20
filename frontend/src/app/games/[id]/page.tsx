@@ -567,7 +567,8 @@ export default async function GameDetailPage({ params }: PageProps) {
               <div className="w-48">
                 <AIAnalysisButton
                   gameId={game.id}
-                  hasExistingAnalysis={game.ai_analyses.length > 0}
+                  hasClaudeAnalysis={game.ai_analyses.some(a => a.ai_provider === 'claude')}
+                  hasGrokAnalysis={game.ai_analyses.some(a => a.ai_provider === 'grok')}
                 />
               </div>
             </div>

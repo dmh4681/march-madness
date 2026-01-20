@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import type { AIAnalysis, AIProvider } from '@/lib/types';
 
+type ViewMode = AIProvider | 'compare';
+
 interface AIAnalysisProps {
   analyses: AIAnalysis[];
   onRequestAnalysis?: (provider: AIProvider) => Promise<void>;
@@ -14,23 +16,24 @@ export function AIAnalysisPanel({
   onRequestAnalysis,
   isLoading = false,
 }: AIAnalysisProps) {
-  const [activeProvider, setActiveProvider] = useState<AIProvider>('claude');
+  const [activeView, setActiveView] = useState<ViewMode>('claude');
 
   const claudeAnalysis = analyses.find((a) => a.ai_provider === 'claude');
   const grokAnalysis = analyses.find((a) => a.ai_provider === 'grok');
+  const hasBothAnalyses = claudeAnalysis && grokAnalysis;
 
   const activeAnalysis =
-    activeProvider === 'claude' ? claudeAnalysis : grokAnalysis;
+    activeView === 'claude' ? claudeAnalysis : activeView === 'grok' ? grokAnalysis : null;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
       {/* Tab Header */}
       <div className="flex border-b border-gray-800">
         <button
-          onClick={() => setActiveProvider('claude')}
+          onClick={() => setActiveView('claude')}
           className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-            activeProvider === 'claude'
-              ? 'bg-gray-800 text-white border-b-2 border-blue-500'
+            activeView === 'claude'
+              ? 'bg-gray-800 text-white border-b-2 border-orange-500'
               : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
           }`}
         >
@@ -43,9 +46,9 @@ export function AIAnalysisPanel({
           </span>
         </button>
         <button
-          onClick={() => setActiveProvider('grok')}
+          onClick={() => setActiveView('grok')}
           className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-            activeProvider === 'grok'
+            activeView === 'grok'
               ? 'bg-gray-800 text-white border-b-2 border-blue-500'
               : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
           }`}
@@ -58,6 +61,21 @@ export function AIAnalysisPanel({
             )}
           </span>
         </button>
+        {hasBothAnalyses && (
+          <button
+            onClick={() => setActiveView('compare')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+              activeView === 'compare'
+                ? 'bg-gray-800 text-white border-b-2 border-purple-500'
+                : 'text-gray-400 hover:text-white hover:bg-gray-800/50'
+            }`}
+          >
+            <span className="flex items-center justify-center gap-2">
+              <CompareIcon />
+              Compare
+            </span>
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -67,25 +85,154 @@ export function AIAnalysisPanel({
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
             <span className="ml-3 text-gray-400">Generating analysis...</span>
           </div>
+        ) : activeView === 'compare' && hasBothAnalyses ? (
+          <CompareView claude={claudeAnalysis} grok={grokAnalysis} />
         ) : activeAnalysis ? (
           <AnalysisContent analysis={activeAnalysis} />
         ) : (
           <div className="text-center py-8">
             <p className="text-gray-400 mb-4">
-              No {activeProvider === 'claude' ? 'Claude' : 'Grok'} analysis
+              No {activeView === 'claude' ? 'Claude' : 'Grok'} analysis
               available yet.
             </p>
             {onRequestAnalysis && (
               <button
-                onClick={() => onRequestAnalysis(activeProvider)}
+                onClick={() => onRequestAnalysis(activeView as AIProvider)}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
               >
-                Generate {activeProvider === 'claude' ? 'Claude' : 'Grok'}{' '}
+                Generate {activeView === 'claude' ? 'Claude' : 'Grok'}{' '}
                 Analysis
               </button>
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis }) {
+  const agreesOnBet = claude.recommended_bet === grok.recommended_bet;
+  const avgConfidence = ((claude.confidence_score || 0) + (grok.confidence_score || 0)) / 2;
+
+  return (
+    <div className="space-y-6">
+      {/* Consensus Banner */}
+      <div className={`p-4 rounded-lg border ${
+        agreesOnBet && claude.recommended_bet !== 'pass'
+          ? 'bg-green-500/10 border-green-500/30'
+          : agreesOnBet
+          ? 'bg-gray-500/10 border-gray-500/30'
+          : 'bg-yellow-500/10 border-yellow-500/30'
+      }`}>
+        <div className="flex items-center gap-3">
+          <div className="text-2xl">
+            {agreesOnBet && claude.recommended_bet !== 'pass' ? '🎯' : agreesOnBet ? '⏸️' : '⚖️'}
+          </div>
+          <div>
+            <div className={`text-sm font-medium ${
+              agreesOnBet && claude.recommended_bet !== 'pass'
+                ? 'text-green-400'
+                : agreesOnBet
+                ? 'text-gray-400'
+                : 'text-yellow-400'
+            }`}>
+              {agreesOnBet ? 'AI Consensus' : 'Split Decision'}
+            </div>
+            <div className="text-white font-semibold">
+              {agreesOnBet
+                ? claude.recommended_bet === 'pass'
+                  ? 'Both recommend passing'
+                  : `Both recommend ${formatBetRecommendation(claude.recommended_bet || '')}`
+                : 'Models disagree on this game'}
+            </div>
+          </div>
+          {agreesOnBet && claude.recommended_bet !== 'pass' && (
+            <div className="ml-auto text-right">
+              <div className="text-2xl font-bold text-green-400">
+                {(avgConfidence * 100).toFixed(0)}%
+              </div>
+              <div className="text-xs text-gray-400">avg confidence</div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Side by Side Picks */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Claude */}
+        <div className="p-4 bg-gray-800/50 rounded-lg border border-orange-500/30">
+          <div className="flex items-center gap-2 mb-3">
+            <ClaudeIcon />
+            <span className="font-medium text-white">Claude</span>
+          </div>
+          <div className="space-y-2">
+            <div>
+              <span className="text-xs text-gray-400">Pick:</span>
+              <div className="text-white font-medium">
+                {claude.recommended_bet === 'pass' ? 'Pass' : formatBetRecommendation(claude.recommended_bet || '')}
+              </div>
+            </div>
+            <div>
+              <span className="text-xs text-gray-400">Confidence:</span>
+              <div className="text-white font-medium">
+                {((claude.confidence_score || 0) * 100).toFixed(0)}%
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Grok */}
+        <div className="p-4 bg-gray-800/50 rounded-lg border border-blue-500/30">
+          <div className="flex items-center gap-2 mb-3">
+            <GrokIcon />
+            <span className="font-medium text-white">Grok</span>
+          </div>
+          <div className="space-y-2">
+            <div>
+              <span className="text-xs text-gray-400">Pick:</span>
+              <div className="text-white font-medium">
+                {grok.recommended_bet === 'pass' ? 'Pass' : formatBetRecommendation(grok.recommended_bet || '')}
+              </div>
+            </div>
+            <div>
+              <span className="text-xs text-gray-400">Confidence:</span>
+              <div className="text-white font-medium">
+                {((grok.confidence_score || 0) * 100).toFixed(0)}%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Key Factors Comparison */}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <h4 className="text-sm font-medium text-orange-400 mb-2 flex items-center gap-1">
+            <ClaudeIcon /> Key Factors
+          </h4>
+          <ul className="space-y-1">
+            {claude.key_factors?.slice(0, 3).map((factor, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <span className="text-orange-400 mt-0.5">•</span>
+                <span className="text-gray-300">{factor}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h4 className="text-sm font-medium text-blue-400 mb-2 flex items-center gap-1">
+            <GrokIcon /> Key Factors
+          </h4>
+          <ul className="space-y-1">
+            {grok.key_factors?.slice(0, 3).map((factor, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <span className="text-blue-400 mt-0.5">•</span>
+                <span className="text-gray-300">{factor}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </div>
     </div>
   );
@@ -215,6 +362,20 @@ function GrokIcon() {
       className="text-blue-400"
     >
       <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+    </svg>
+  );
+}
+
+function CompareIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      className="text-purple-400"
+    >
+      <path d="M10 3H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zM9 9H5V5h4v4zm11-6h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1zm-1 6h-4V5h4v4zm1 4h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1zm-1 6h-4v-4h4v4zm-9-6H4a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-6a1 1 0 0 0-1-1zm-1 6H5v-4h4v4z" />
     </svg>
   );
 }
