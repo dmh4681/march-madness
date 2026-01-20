@@ -219,7 +219,7 @@ def process_odds_data(odds_data: list[dict]) -> dict:
 
             for bookmaker in game.get("bookmakers", []):
                 for market in bookmaker.get("markets", []):
-                    if market.get("key") == "spreads":
+                    if market.get("key") == "spreads" and home_spread is None:
                         for outcome in market.get("outcomes", []):
                             if teams_match(outcome.get("name"), home_team):
                                 home_spread = outcome.get("point")
@@ -227,18 +227,18 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                     elif market.get("key") == "h2h":
                         for outcome in market.get("outcomes", []):
                             outcome_name = outcome.get("name", "")
-                            if teams_match(outcome_name, home_team):
+                            if home_ml is None and teams_match(outcome_name, home_team):
                                 home_ml = outcome.get("price")
-                            elif teams_match(outcome_name, away_team):
+                            elif away_ml is None and teams_match(outcome_name, away_team):
                                 away_ml = outcome.get("price")
 
-                    elif market.get("key") == "totals":
+                    elif market.get("key") == "totals" and over_under is None:
                         for outcome in market.get("outcomes", []):
                             if outcome.get("name") == "Over":
                                 over_under = outcome.get("point")
 
-                # Use first bookmaker's odds
-                if home_spread is not None:
+                # Stop once we have all data we need
+                if home_spread is not None and home_ml is not None and away_ml is not None:
                     break
 
             # Insert spread record
@@ -253,6 +253,10 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                     "source": "odds-api",
                     "is_closing_line": False,
                 }
+
+                # Log if moneyline is missing
+                if home_ml is None or away_ml is None:
+                    print(f"  Warning: Missing ML for {away_team} @ {home_team} (home_ml={home_ml}, away_ml={away_ml})")
 
                 supabase.table("spreads").insert(spread_data).execute()
                 spreads_inserted += 1
