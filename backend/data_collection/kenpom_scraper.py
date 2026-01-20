@@ -126,7 +126,7 @@ def get_team_id(team_name: str) -> Optional[str]:
 
 def fetch_kenpom_ratings(season: int = 2025) -> Optional[pd.DataFrame]:
     """
-    Fetch KenPom efficiency ratings for a season.
+    Fetch KenPom Pomeroy ratings for a season.
 
     Args:
         season: The season year (e.g., 2025 for 2024-25 season)
@@ -140,18 +140,22 @@ def fetch_kenpom_ratings(season: int = 2025) -> Optional[pd.DataFrame]:
 
     try:
         from kenpompy.utils import login
-        import kenpompy.summary as kp
+        import kenpompy.misc as kp
 
         print(f"Logging into KenPom as {KENPOM_EMAIL}...")
         browser = login(KENPOM_EMAIL, KENPOM_PASSWORD)
 
-        print(f"Fetching efficiency ratings for {season}...")
-        efficiency = kp.get_efficiency(browser, season=str(season))
+        print(f"Fetching Pomeroy ratings for {season}...")
+        # get_pomeroy_ratings returns the main ratings table with rank, AdjEM, AdjO, AdjD, etc.
+        ratings = kp.get_pomeroy_ratings(browser, season=str(season))
 
-        print(f"Fetched {len(efficiency)} team ratings")
+        print(f"Fetched {len(ratings)} team ratings")
+        print(f"Columns available: {list(ratings.columns)}")
+        if len(ratings) > 0:
+            print(f"Sample row: {ratings.iloc[0].to_dict()}")
         browser.close()
 
-        return efficiency
+        return ratings
 
     except ImportError as e:
         print(f"Import error - make sure kenpompy and selenium are installed: {e}")
@@ -194,6 +198,11 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
     """
     print(f"\n=== Storing KenPom Ratings ===")
 
+    # Debug: Print actual column names from kenpompy
+    print(f"DataFrame columns: {list(df.columns)}")
+    if len(df) > 0:
+        print(f"Sample row: {df.iloc[0].to_dict()}")
+
     inserted = 0
     skipped = 0
     errors = 0
@@ -209,32 +218,50 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
                     print(f"  Could not match team: {team_name}")
                 continue
 
-            # Parse the data - column names may vary by kenpompy version
+            # Parse the data - column names from get_pomeroy_ratings
+            # Typical columns: Rk, Team, Conf, W-L, AdjEM, AdjO, AdjO Rank, AdjD, AdjD Rank,
+            # AdjT, AdjT Rank, Luck, Luck Rank, SOS AdjEM, SOS AdjEM Rank, OppO, OppO Rank,
+            # OppD, OppD Rank, NCSOS AdjEM, NCSOS AdjEM Rank
+
+            # Try multiple possible column name formats
+            def get_col(row, *names):
+                """Try multiple column names and return first match."""
+                for name in names:
+                    val = row.get(name)
+                    if val is not None and str(val) != 'nan':
+                        return val
+                return None
+
+            # Parse W-L record
+            wl = str(get_col(row, "W-L", "W-L.1", "Record") or "0-0")
+            wins = safe_int(wl.split("-")[0]) if "-" in wl else 0
+            losses = safe_int(wl.split("-")[-1]) if "-" in wl else 0
+
             rating_data = {
                 "team_id": team_id,
                 "season": season,
                 "captured_date": datetime.now().date().isoformat(),
-                "rank": safe_int(row.get("Rk", row.get("Rank"))),
-                "adj_efficiency_margin": safe_float(row.get("AdjEM", row.get("NetRtg"))),
-                "adj_offense": safe_float(row.get("AdjO", row.get("AdjOE"))),
-                "adj_offense_rank": safe_int(row.get("AdjO.1", row.get("AdjOE Rank"))),
-                "adj_defense": safe_float(row.get("AdjD", row.get("AdjDE"))),
-                "adj_defense_rank": safe_int(row.get("AdjD.1", row.get("AdjDE Rank"))),
-                "adj_tempo": safe_float(row.get("AdjT", row.get("AdjTempo"))),
-                "adj_tempo_rank": safe_int(row.get("AdjT.1", row.get("AdjTempo Rank"))),
-                "luck": safe_float(row.get("Luck")),
-                "luck_rank": safe_int(row.get("Luck.1", row.get("Luck Rank"))),
-                "sos_adj_em": safe_float(row.get("SOS AdjEM", row.get("SOS"))),
-                "sos_adj_em_rank": safe_int(row.get("SOS AdjEM.1", row.get("SOS Rank"))),
-                "sos_opp_offense": safe_float(row.get("SOS OppO")),
-                "sos_opp_offense_rank": safe_int(row.get("SOS OppO.1")),
-                "sos_opp_defense": safe_float(row.get("SOS OppD")),
-                "sos_opp_defense_rank": safe_int(row.get("SOS OppD.1")),
-                "ncsos_adj_em": safe_float(row.get("NCSOS AdjEM", row.get("NCSOS"))),
-                "ncsos_adj_em_rank": safe_int(row.get("NCSOS AdjEM.1", row.get("NCSOS Rank"))),
-                "wins": safe_int(str(row.get("W-L", "0-0")).split("-")[0]),
-                "losses": safe_int(str(row.get("W-L", "0-0")).split("-")[-1]),
-                "conference": row.get("Conf", row.get("Conference")),
+                "rank": safe_int(get_col(row, "Rk", "Rank", "Rk.")),
+                "adj_efficiency_margin": safe_float(get_col(row, "AdjEM", "AdjEM.", "NetRtg")),
+                "adj_offense": safe_float(get_col(row, "AdjO", "AdjO.", "AdjOE")),
+                "adj_offense_rank": safe_int(get_col(row, "AdjO Rank", "AdjO.1", "AdjO Rk")),
+                "adj_defense": safe_float(get_col(row, "AdjD", "AdjD.", "AdjDE")),
+                "adj_defense_rank": safe_int(get_col(row, "AdjD Rank", "AdjD.1", "AdjD Rk")),
+                "adj_tempo": safe_float(get_col(row, "AdjT", "AdjT.", "AdjTempo")),
+                "adj_tempo_rank": safe_int(get_col(row, "AdjT Rank", "AdjT.1", "AdjT Rk")),
+                "luck": safe_float(get_col(row, "Luck", "Luck.")),
+                "luck_rank": safe_int(get_col(row, "Luck Rank", "Luck.1", "Luck Rk")),
+                "sos_adj_em": safe_float(get_col(row, "SOS AdjEM", "Strength of Schedule AdjEM", "SOS")),
+                "sos_adj_em_rank": safe_int(get_col(row, "SOS AdjEM Rank", "SOS AdjEM.1", "SOS Rk")),
+                "sos_opp_offense": safe_float(get_col(row, "OppO", "SOS OppO", "OppO.")),
+                "sos_opp_offense_rank": safe_int(get_col(row, "OppO Rank", "OppO.1", "OppO Rk")),
+                "sos_opp_defense": safe_float(get_col(row, "OppD", "SOS OppD", "OppD.")),
+                "sos_opp_defense_rank": safe_int(get_col(row, "OppD Rank", "OppD.1", "OppD Rk")),
+                "ncsos_adj_em": safe_float(get_col(row, "NCSOS AdjEM", "NCSOS", "NCSOS AdjEM.")),
+                "ncsos_adj_em_rank": safe_int(get_col(row, "NCSOS AdjEM Rank", "NCSOS.1", "NCSOS Rk")),
+                "wins": wins,
+                "losses": losses,
+                "conference": get_col(row, "Conf", "Conference"),
             }
 
             # Remove None values
