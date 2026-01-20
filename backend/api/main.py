@@ -185,19 +185,50 @@ def predict(request: PredictRequest):
                 reasoning=None,
             )
 
-        # No prediction exists - use quick heuristic
+        # No prediction exists - calculate using spread-based heuristics
         context = build_game_context(request.game_id)
         quick = get_quick_recommendation(context)
+
+        # Calculate probability based on spread
+        spread = spread_data.get("home_spread") if spread_data else None
+        home_cover_prob = 0.5
+        confidence = "low"
+        edge_pct = None
+
+        if spread is not None:
+            # Base adjustment for home court advantage
+            home_cover_prob = 0.52
+
+            # Conference games have stronger home edge
+            if game.get("is_conference_game"):
+                home_cover_prob = 0.53
+
+            # Adjust based on spread magnitude
+            if abs(spread) > 10:
+                home_cover_prob = 0.48 if spread < 0 else 0.52
+            elif abs(spread) < 3:
+                home_cover_prob = 0.55 if spread < 0 else 0.54
+            elif abs(spread) >= 3 and abs(spread) <= 7:
+                home_cover_prob = 0.54 if spread < 0 else 0.52
+
+            # Determine confidence
+            edge = abs(home_cover_prob - 0.5) * 100
+            if edge > 4:
+                confidence = "high"
+                edge_pct = edge
+            elif edge > 2:
+                confidence = "medium"
+                edge_pct = edge
 
         return PredictResponse(
             game_id=request.game_id,
             home_team=home_team,
             away_team=away_team,
-            home_cover_prob=0.5,
-            away_cover_prob=0.5,
-            confidence="low",
+            home_cover_prob=home_cover_prob,
+            away_cover_prob=1 - home_cover_prob,
+            confidence=confidence,
             recommended_bet=quick["recommended_bet"],
-            edge_pct=None,
+            edge_pct=edge_pct,
             reasoning=quick["reasoning"],
         )
 
@@ -214,22 +245,46 @@ def predict(request: PredictRequest):
 
         quick = get_quick_recommendation(context)
 
-        # Simple probability estimation
-        home_prob = 0.5
-        if request.spread:
-            # Rough conversion: each point of spread ~ 3% probability
-            home_prob = 0.5 - (request.spread * 0.03)
-            home_prob = max(0.2, min(0.8, home_prob))
+        # Calculate probability based on spread
+        home_cover_prob = 0.5
+        confidence = "low"
+        edge_pct = None
+
+        if request.spread is not None:
+            spread = request.spread
+            # Base adjustment for home court advantage
+            home_cover_prob = 0.52
+
+            # Conference games have stronger home edge
+            if request.is_conference_game:
+                home_cover_prob = 0.53
+
+            # Adjust based on spread magnitude
+            if abs(spread) > 10:
+                home_cover_prob = 0.48 if spread < 0 else 0.52
+            elif abs(spread) < 3:
+                home_cover_prob = 0.55 if spread < 0 else 0.54
+            elif abs(spread) >= 3 and abs(spread) <= 7:
+                home_cover_prob = 0.54 if spread < 0 else 0.52
+
+            # Determine confidence
+            edge = abs(home_cover_prob - 0.5) * 100
+            if edge > 4:
+                confidence = "high"
+                edge_pct = edge
+            elif edge > 2:
+                confidence = "medium"
+                edge_pct = edge
 
         return PredictResponse(
             game_id=None,
             home_team=request.home_team,
             away_team=request.away_team,
-            home_cover_prob=home_prob,
-            away_cover_prob=1 - home_prob,
-            confidence="low",
+            home_cover_prob=home_cover_prob,
+            away_cover_prob=1 - home_cover_prob,
+            confidence=confidence,
             recommended_bet=quick["recommended_bet"],
-            edge_pct=None,
+            edge_pct=edge_pct,
             reasoning=quick["reasoning"],
         )
 
