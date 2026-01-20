@@ -312,11 +312,6 @@ def run_predictions(force_regenerate: bool = False) -> dict:
     # If force regenerate, delete all predictions for upcoming games first
     if force_regenerate:
         print("Force regenerate enabled - deleting existing predictions for upcoming games...")
-        delete_result = supabase.table("predictions").delete().gte(
-            "game_id",
-            supabase.table("games").select("id").gte("date", today).is_("home_score", "null")
-        ).execute()
-        # Actually, the above won't work with supabase-py. Let's do it differently:
         # Get all upcoming game IDs first
         upcoming = supabase.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
         if upcoming.data:
