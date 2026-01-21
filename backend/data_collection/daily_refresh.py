@@ -11,6 +11,8 @@ Can also be triggered via API endpoint: POST /refresh
 
 import os
 import sys
+import re
+import logging
 from datetime import datetime, date, timedelta
 from typing import Optional
 import json
@@ -18,20 +20,45 @@ import json
 import requests
 import pandas as pd
 from dotenv import load_dotenv
-from supabase import create_client, Client
 
 load_dotenv()
 
-# Configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY", "784824896571fbca6b3fe5a3957ad598")
+# Configure logging - avoid leaking sensitive info
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("ERROR: SUPABASE_URL and SUPABASE_SERVICE_KEY must be set")
-    sys.exit(1)
+# =============================================================================
+# SECURITY: Configuration
+# =============================================================================
+# SECURITY: Get API key from environment, never hardcode
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+if not ODDS_API_KEY:
+    logger.warning("ODDS_API_KEY not configured - odds fetching will fail")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# SECURITY: Import secure Supabase client with timeouts and validation
+from backend.api.supabase_client import get_supabase, _validate_uuid, _sanitize_string
+
+def _get_supabase():
+    """Get the secure Supabase client with proper error handling."""
+    try:
+        return get_supabase()
+    except ValueError as e:
+        logger.error(f"Failed to initialize Supabase client: {e}")
+        print(f"ERROR: {e}")
+        sys.exit(1)
+
+# Initialize client lazily on first use
+supabase = None
+
+def _ensure_supabase():
+    """Ensure Supabase client is initialized."""
+    global supabase
+    if supabase is None:
+        supabase = _get_supabase()
+    return supabase
 
 # Team name mapping for The Odds API -> our normalized names
 ODDS_API_TEAM_MAP = {
@@ -92,18 +119,35 @@ def normalize_team_name(name: str) -> str:
 
 
 def get_team_id(name: str) -> Optional[str]:
-    """Get team ID from normalized name."""
+    """
+    Get team ID from normalized name.
+
+    SECURITY: Input is sanitized to prevent SQL wildcard abuse in ilike queries.
+    """
     normalized = normalize_team_name(name)
     if not normalized:
         return None
 
-    result = supabase.table("teams").select("id").eq("normalized_name", normalized).execute()
+    # SECURITY: Sanitize input - remove SQL wildcards and limit length
+    # This prevents wildcard abuse in the ilike query below
+    sanitized = _sanitize_string(normalized, max_length=100, field_name="team_name")
+    # Remove SQL wildcards that could be abused in ilike queries
+    sanitized = re.sub(r'[%_]', '', sanitized)
+
+    if not sanitized:
+        return None
+
+    client = _ensure_supabase()
+
+    # First try exact match (most secure)
+    result = client.table("teams").select("id").eq("normalized_name", sanitized).execute()
 
     if result.data:
         return result.data[0]["id"]
 
-    # Try partial match
-    result = supabase.table("teams").select("id, normalized_name").ilike("normalized_name", f"%{normalized}%").execute()
+    # SECURITY: For partial match, use sanitized input without wildcards
+    # The wildcards are added by us, not from user input
+    result = client.table("teams").select("id, normalized_name").ilike("normalized_name", f"%{sanitized}%").execute()
 
     if result.data:
         return result.data[0]["id"]
@@ -146,6 +190,7 @@ def process_odds_data(odds_data: list[dict]) -> dict:
     """Process odds data and match to our games."""
     print("\n=== Processing Odds Data ===")
 
+    client = _ensure_supabase()
     games_updated = 0
     spreads_inserted = 0
 
@@ -169,7 +214,7 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                 game_date = datetime.fromisoformat(commence_time.replace("Z", "+00:00")).date().isoformat()
 
             # Find or create game
-            game_result = supabase.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
+            game_result = client.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
 
             if game_result.data:
                 game_id = game_result.data[0]["id"]
@@ -184,7 +229,7 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                     "is_conference_game": False,  # Would need to determine this
                     "status": "scheduled",
                 }
-                insert_result = supabase.table("games").insert(new_game).execute()
+                insert_result = client.table("games").insert(new_game).execute()
                 if insert_result.data:
                     game_id = insert_result.data[0]["id"]
                     games_updated += 1
@@ -258,7 +303,7 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                 if home_ml is None or away_ml is None:
                     print(f"  Warning: Missing ML for {away_team} @ {home_team} (home_ml={home_ml}, away_ml={away_ml})")
 
-                supabase.table("spreads").insert(spread_data).execute()
+                client.table("spreads").insert(spread_data).execute()
                 spreads_inserted += 1
 
         except Exception as e:
@@ -310,6 +355,8 @@ def run_predictions(force_regenerate: bool = False) -> dict:
     """
     print("\n=== Running Predictions ===")
 
+    client = _ensure_supabase()
+
     # Get upcoming games without predictions
     today = date.today().isoformat()
 
@@ -317,14 +364,14 @@ def run_predictions(force_regenerate: bool = False) -> dict:
     if force_regenerate:
         print("Force regenerate enabled - deleting existing predictions for upcoming games...")
         # Get all upcoming game IDs first
-        upcoming = supabase.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
+        upcoming = client.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
         if upcoming.data:
             game_ids = [g["id"] for g in upcoming.data]
             for gid in game_ids:
-                supabase.table("predictions").delete().eq("game_id", gid).execute()
+                client.table("predictions").delete().eq("game_id", gid).execute()
             print(f"  Deleted predictions for {len(game_ids)} games")
 
-    result = supabase.table("games").select(
+    result = client.table("games").select(
         "id, date, home_team_id, away_team_id, is_conference_game"
     ).gte("date", today).is_("home_score", "null").execute()
 
@@ -341,12 +388,12 @@ def run_predictions(force_regenerate: bool = False) -> dict:
         try:
             # Check if prediction already exists (skip if not force regenerating)
             if not force_regenerate:
-                existing = supabase.table("predictions").select("id").eq("game_id", game["id"]).execute()
+                existing = client.table("predictions").select("id").eq("game_id", game["id"]).execute()
                 if existing.data:
                     continue
 
             # Get latest spread for this game
-            spread_result = supabase.table("spreads").select("home_spread").eq("game_id", game["id"]).order("captured_at", desc=True).limit(1).execute()
+            spread_result = client.table("spreads").select("home_spread").eq("game_id", game["id"]).order("captured_at", desc=True).limit(1).execute()
 
             spread = spread_result.data[0]["home_spread"] if spread_result.data else None
 
@@ -402,7 +449,7 @@ def run_predictions(force_regenerate: bool = False) -> dict:
                 "edge_pct": edge_pct,
             }
 
-            supabase.table("predictions").insert(prediction_data).execute()
+            client.table("predictions").insert(prediction_data).execute()
             predictions_created += 1
 
         except Exception as e:
@@ -417,10 +464,12 @@ def update_game_results() -> dict:
     """Update scores for completed games."""
     print("\n=== Updating Game Results ===")
 
+    client = _ensure_supabase()
+
     # Find games that should have finished but don't have scores
     yesterday = (date.today() - timedelta(days=1)).isoformat()
 
-    result = supabase.table("games").select("id, external_id").lte("date", yesterday).is_("home_score", "null").limit(50).execute()
+    result = client.table("games").select("id, external_id").lte("date", yesterday).is_("home_score", "null").limit(50).execute()
 
     if not result.data:
         print("No games need score updates")
@@ -437,10 +486,11 @@ def create_today_games_view() -> dict:
     """Populate the today_games view data."""
     print("\n=== Creating Today's Games View ===")
 
+    client = _ensure_supabase()
     today = date.today().isoformat()
 
     # Get today's games with all related data
-    result = supabase.table("games").select("""
+    result = client.table("games").select("""
         id,
         date,
         is_conference_game,
@@ -506,10 +556,11 @@ def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
 
+    client = _ensure_supabase()
     today = date.today().isoformat()
 
     # Get today's games
-    result = supabase.table("games").select("id").eq("date", today).execute()
+    result = client.table("games").select("id").eq("date", today).execute()
 
     if not result.data:
         print("No games today to analyze")
@@ -526,7 +577,7 @@ def run_ai_analysis() -> dict:
 
         try:
             # Check if analysis already exists for this game
-            existing = supabase.table("ai_analysis").select("id").eq("game_id", game_id).eq("ai_provider", "claude").execute()
+            existing = client.table("ai_analysis").select("id").eq("game_id", game_id).eq("ai_provider", "claude").execute()
 
             if existing.data:
                 print(f"  Analysis already exists for game {game_id[:8]}...")

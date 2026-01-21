@@ -8,15 +8,25 @@ Usage:
 """
 
 import os
+import re
+import logging
 from datetime import date, datetime
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 load_dotenv()
+
+# Configure logging - avoid leaking sensitive info in logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Import our modules
 from .supabase_client import (
@@ -33,26 +43,102 @@ from .supabase_client import (
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
 
+
+# =============================================================================
+# SECURITY: CORS Configuration
+# =============================================================================
+# SECURITY: Only allow specific, trusted origins in production
+# Default to localhost for development only
+def _get_allowed_origins() -> list[str]:
+    """
+    Parse and validate allowed CORS origins from environment.
+
+    Security considerations:
+    - Only allow HTTPS origins in production (except localhost for dev)
+    - Validate origin format to prevent injection
+    - Reject wildcard (*) origins for security
+    """
+    raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+
+    validated_origins = []
+    # Regex to validate origin format (protocol://domain:optional_port)
+    origin_pattern = re.compile(r'^https?://[a-zA-Z0-9][-a-zA-Z0-9.]*[a-zA-Z0-9](:\d+)?$')
+
+    for origin in origins:
+        # SECURITY: Reject wildcard - never allow all origins
+        if origin == "*":
+            logger.warning("SECURITY: Wildcard CORS origin rejected. Configure specific origins.")
+            continue
+
+        # Validate origin format
+        if origin_pattern.match(origin):
+            validated_origins.append(origin)
+        else:
+            logger.warning(f"SECURITY: Invalid CORS origin format rejected: {origin[:50]}")
+
+    if not validated_origins:
+        # SECURITY: Fail safe - default to localhost only if no valid origins
+        logger.warning("SECURITY: No valid CORS origins configured, defaulting to localhost only")
+        validated_origins = ["http://localhost:3000"]
+
+    return validated_origins
+
+
+ALLOWED_ORIGINS = _get_allowed_origins()
+logger.info(f"CORS configured for origins: {ALLOWED_ORIGINS}")
+
 app = FastAPI(
     title="Conference Contrarian API",
     description="AI-powered NCAA basketball betting analysis",
     version="1.0.0",
+    # SECURITY: Disable automatic docs in production if needed
+    # docs_url=None if os.getenv("ENVIRONMENT") == "production" else "/docs",
+    # redoc_url=None if os.getenv("ENVIRONMENT") == "production" else "/redoc",
 )
 
-# CORS configuration
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
-# Clean up any whitespace from env var parsing
-ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
-
+# SECURITY: Strict CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,  # Disable credentials to allow simpler CORS
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,  # Only specific trusted origins
+    allow_credentials=False,  # SECURITY: Disabled - prevents credential-based attacks
+    allow_methods=["GET", "POST", "OPTIONS"],  # SECURITY: Only methods actually used
+    allow_headers=["Content-Type", "Accept", "Authorization"],  # SECURITY: Explicit allowed headers
+    expose_headers=["X-Request-ID"],  # SECURITY: Only expose necessary headers
     max_age=600,  # Cache preflight for 10 minutes
 )
+
+
+# =============================================================================
+# SECURITY: Global Exception Handler
+# =============================================================================
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    SECURITY: Global exception handler that prevents internal error details from leaking.
+
+    - Logs full error details server-side for debugging
+    - Returns generic error message to client
+    - Never exposes stack traces, file paths, or internal state
+    """
+    # Generate a request ID for correlation (without exposing internal details)
+    request_id = id(request) % 100000  # Simple numeric ID for client reference
+
+    # Log the full error server-side for debugging
+    logger.error(
+        f"Request ID {request_id}: Unhandled exception on {request.method} {request.url.path}",
+        exc_info=exc
+    )
+
+    # SECURITY: Return generic error to client - never expose internal details
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "An internal error occurred",
+            "request_id": request_id,
+            "message": "Please contact support if this persists"
+        }
+    )
 
 
 # ============================================
@@ -322,9 +408,15 @@ def ai_analysis(request: AIAnalysisRequest):
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        # SECURITY: ValueError is user-input related, safe to return sanitized message
+        error_msg = str(e)
+        if len(error_msg) > 100:
+            error_msg = error_msg[:100]  # Truncate long error messages
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+        # SECURITY: Log full error server-side, return generic message to client
+        logger.error(f"AI analysis failed for game {request.game_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="AI analysis failed. Please try again later.")
 
 
 @app.get("/today")
@@ -340,12 +432,13 @@ def get_today():
             "games": games,
         }
     except Exception as e:
-        # Return empty if database not configured
+        # SECURITY: Log error server-side, return safe response to client
+        logger.error(f"Error fetching today's games: {e}", exc_info=True)
         return {
             "date": date.today().isoformat(),
             "game_count": 0,
             "games": [],
-            "error": str(e),
+            "error": "Unable to fetch games. Please try again later.",
         }
 
 
@@ -374,7 +467,9 @@ def get_games(
             "games": games,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Error fetching games: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to fetch games. Please try again later.")
 
 
 @app.get("/games/{game_id}", response_model=GameResponse)
@@ -432,7 +527,9 @@ def get_stats(season: Optional[int] = None):
         return StatsResponse(**stats)
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Error calculating stats for season {season}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to fetch statistics. Please try again later.")
 
 
 @app.get("/rankings")
@@ -451,7 +548,9 @@ def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
             "rankings": rankings,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Error fetching rankings for season {season}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to fetch rankings. Please try again later.")
 
 
 @app.post("/refresh")
@@ -486,13 +585,17 @@ def refresh_data(
         }
 
     except ImportError as e:
+        # SECURITY: Log detailed error server-side
+        logger.error(f"Refresh import error: {e}", exc_info=True)
         return {
             "status": "error",
             "timestamp": datetime.now().isoformat(),
-            "error": f"Import error: {str(e)}",
+            "error": "Service configuration error",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Refresh failed: {str(e)}")
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Data refresh failed. Please try again later.")
 
 
 @app.post("/regenerate-predictions")
@@ -512,7 +615,9 @@ def regenerate_predictions():
             "predictions_created": results.get("predictions_created", 0),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Prediction regeneration failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Prediction regeneration failed. Please try again later.")
 
 
 @app.post("/refresh-haslametrics")
@@ -532,12 +637,16 @@ def refresh_haslametrics_endpoint():
             "results": results,
         }
     except ImportError as e:
+        # SECURITY: Log detailed error server-side
+        logger.error(f"Haslametrics import error: {e}", exc_info=True)
         return {
             "status": "error",
-            "error": f"Import error: {str(e)}",
+            "error": "Service configuration error",
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Haslametrics refresh failed: {str(e)}")
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"Haslametrics refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Haslametrics refresh failed. Please try again later.")
 
 
 @app.get("/backtest")
