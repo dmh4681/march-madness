@@ -745,6 +745,116 @@ def backtest(
     }
 
 
+@app.get("/debug/ai-analysis/{game_id}")
+def debug_ai_analysis(game_id: str, provider: str = "claude"):
+    """
+    Debug endpoint to diagnose AI analysis issues.
+    Returns detailed error information instead of generic messages.
+
+    WARNING: This endpoint exposes internal errors - remove in production!
+    """
+    results = {
+        "game_id": game_id,
+        "provider": provider,
+        "steps": {},
+        "errors": [],
+    }
+
+    # Step 1: Check if game exists
+    try:
+        game = get_game_by_id(game_id)
+        if game:
+            results["steps"]["1_game_fetch"] = {
+                "status": "success",
+                "home_team": game.get("home_team", {}).get("name"),
+                "away_team": game.get("away_team", {}).get("name"),
+            }
+        else:
+            results["steps"]["1_game_fetch"] = {"status": "failed", "error": "Game not found"}
+            results["errors"].append("Game not found")
+            return results
+    except Exception as e:
+        results["steps"]["1_game_fetch"] = {"status": "error", "error": str(e)}
+        results["errors"].append(f"Game fetch error: {str(e)}")
+        return results
+
+    # Step 2: Build game context
+    try:
+        context = build_game_context(game_id)
+        results["steps"]["2_build_context"] = {
+            "status": "success",
+            "has_kenpom": bool(context.get("home_kenpom") or context.get("away_kenpom")),
+            "has_haslametrics": bool(context.get("home_haslametrics") or context.get("away_haslametrics")),
+            "has_spread": context.get("spread") is not None,
+        }
+    except Exception as e:
+        results["steps"]["2_build_context"] = {"status": "error", "error": str(e)}
+        results["errors"].append(f"Context build error: {str(e)}")
+        return results
+
+    # Step 3: Check API keys
+    import os
+    results["steps"]["3_api_keys"] = {
+        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "grok_configured": bool(os.getenv("GROK_API_KEY")),
+    }
+
+    if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
+        results["errors"].append("ANTHROPIC_API_KEY not configured")
+    if provider == "grok" and not os.getenv("GROK_API_KEY"):
+        results["errors"].append("GROK_API_KEY not configured")
+
+    # Step 4: Try the actual AI call
+    try:
+        from .ai_service import analyze_with_claude, analyze_with_grok, build_analysis_prompt
+
+        prompt = build_analysis_prompt(context)
+        results["steps"]["4_prompt_build"] = {"status": "success", "prompt_length": len(prompt)}
+
+        if provider == "claude":
+            analysis_result = analyze_with_claude(context)
+        else:
+            analysis_result = analyze_with_grok(context)
+
+        results["steps"]["5_ai_call"] = {
+            "status": "success",
+            "recommended_bet": analysis_result.get("recommended_bet"),
+            "confidence": analysis_result.get("confidence_score"),
+        }
+    except Exception as e:
+        results["steps"]["5_ai_call"] = {"status": "error", "error": str(e), "type": type(e).__name__}
+        results["errors"].append(f"AI call error ({type(e).__name__}): {str(e)}")
+        return results
+
+    # Step 5: Try database insert
+    try:
+        from .supabase_client import insert_ai_analysis
+
+        # Prepare the data that would be inserted
+        insert_data = {
+            "game_id": game_id,
+            "ai_provider": provider,
+            "analysis": analysis_result.get("analysis", ""),
+            "recommended_bet": analysis_result.get("recommended_bet"),
+            "confidence_score": analysis_result.get("confidence_score"),
+            "key_factors": analysis_result.get("key_factors", []),
+            "reasoning": analysis_result.get("reasoning", ""),
+        }
+
+        # Try the insert
+        inserted = insert_ai_analysis(insert_data)
+        results["steps"]["6_db_insert"] = {
+            "status": "success",
+            "inserted_id": inserted.get("id") if inserted else None,
+        }
+    except Exception as e:
+        results["steps"]["6_db_insert"] = {"status": "error", "error": str(e), "type": type(e).__name__}
+        results["errors"].append(f"DB insert error ({type(e).__name__}): {str(e)}")
+
+    results["overall_status"] = "success" if not results["errors"] else "failed"
+    return results
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
