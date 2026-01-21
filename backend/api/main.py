@@ -827,18 +827,26 @@ def debug_ai_analysis(game_id: str, provider: str = "claude"):
         return results
 
     # Step 5: Try database insert
+    # Note: The debug endpoint just verifies the flow - actual insert uses analyze_game()
+    # which passes the full analysis_result dict with correct column names
     try:
         from .supabase_client import insert_ai_analysis
 
-        # Prepare the data that would be inserted
+        # The analysis_result from AI already has correct column names matching the table:
+        # ai_provider, model_used, analysis_type, prompt_hash, response, recommended_bet,
+        # confidence_score, key_factors, reasoning, tokens_used
         insert_data = {
             "game_id": game_id,
-            "ai_provider": provider,
-            "analysis": analysis_result.get("analysis", ""),
+            "ai_provider": analysis_result.get("ai_provider", provider),
+            "model_used": analysis_result.get("model_used"),
+            "analysis_type": analysis_result.get("analysis_type", "matchup"),
+            "prompt_hash": analysis_result.get("prompt_hash"),
+            "response": analysis_result.get("response", ""),  # Full AI response text
             "recommended_bet": analysis_result.get("recommended_bet"),
             "confidence_score": analysis_result.get("confidence_score"),
             "key_factors": analysis_result.get("key_factors", []),
             "reasoning": analysis_result.get("reasoning", ""),
+            "tokens_used": analysis_result.get("tokens_used"),
         }
 
         # Try the insert
