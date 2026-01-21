@@ -446,25 +446,45 @@ def get_today():
 def get_games(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    days: int = 7
+    days: int = 7,
+    page: int = 1,
+    page_size: int = 20
 ):
     """
-    Get upcoming games.
+    Get upcoming games with pagination.
 
     Query params:
     - start_date: ISO date string (default: today)
     - end_date: ISO date string (default: start + days)
     - days: Number of days to fetch (default: 7)
+    - page: Page number, 1-indexed (default: 1)
+    - page_size: Number of games per page, max 50 (default: 20)
     """
     try:
+        # SECURITY: Validate pagination params
+        page = max(1, page)  # Ensure page is at least 1
+        page_size = max(1, min(50, page_size))  # Clamp between 1 and 50
+
         if start_date:
-            games = get_games_by_date(date.fromisoformat(start_date))
+            all_games = get_games_by_date(date.fromisoformat(start_date))
         else:
-            games = get_upcoming_games(days)
+            all_games = get_upcoming_games(days)
+
+        # Calculate pagination
+        total_games = len(all_games)
+        total_pages = (total_games + page_size - 1) // page_size  # Ceiling division
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_games = all_games[start_idx:end_idx]
 
         return {
-            "game_count": len(games),
-            "games": games,
+            "game_count": len(paginated_games),
+            "total_games": total_games,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_more": page < total_pages,
+            "games": paginated_games,
         }
     except Exception as e:
         # SECURITY: Log error server-side, return generic message to client
@@ -496,6 +516,64 @@ def get_game(game_id: str):
         is_conference_game=game.get("is_conference_game", False),
         prediction=prediction,
         ai_analyses=analyses,
+    )
+
+
+class GameAnalyticsResponse(BaseModel):
+    """Response model for game analytics (KenPom + Haslametrics)."""
+    game_id: str
+    home_team: str
+    away_team: str
+    home_kenpom: Optional[dict] = None
+    away_kenpom: Optional[dict] = None
+    home_haslametrics: Optional[dict] = None
+    away_haslametrics: Optional[dict] = None
+
+
+@app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse)
+def get_game_analytics(game_id: str):
+    """
+    Get KenPom and Haslametrics analytics for a specific game.
+
+    This endpoint is designed for lazy loading - fetch analytics only when
+    a user expands a game card or views detailed analytics section.
+    """
+    from .supabase_client import get_team_kenpom, get_team_haslametrics
+
+    game = get_game_by_id(game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    home_team = game.get("home_team", {})
+    away_team = game.get("away_team", {})
+    home_team_id = home_team.get("id")
+    away_team_id = away_team.get("id")
+
+    # Fetch analytics data for both teams
+    home_kenpom = None
+    away_kenpom = None
+    home_haslametrics = None
+    away_haslametrics = None
+
+    try:
+        if home_team_id:
+            home_kenpom = get_team_kenpom(home_team_id)
+            home_haslametrics = get_team_haslametrics(home_team_id)
+        if away_team_id:
+            away_kenpom = get_team_kenpom(away_team_id)
+            away_haslametrics = get_team_haslametrics(away_team_id)
+    except Exception as e:
+        # SECURITY: Log error server-side, continue without analytics
+        logger.warning(f"Error fetching analytics for game {game_id}: {e}")
+
+    return GameAnalyticsResponse(
+        game_id=game_id,
+        home_team=home_team.get("name", "Unknown"),
+        away_team=away_team.get("name", "Unknown"),
+        home_kenpom=home_kenpom,
+        away_kenpom=away_kenpom,
+        home_haslametrics=home_haslametrics,
+        away_haslametrics=away_haslametrics,
     )
 
 
