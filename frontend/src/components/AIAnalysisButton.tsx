@@ -1,7 +1,93 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import type { AIProvider } from '@/lib/types';
+
+// Error types for user-friendly messages
+type ErrorType = 'timeout' | 'network' | 'server' | 'api_limit' | 'unknown';
+
+interface ErrorState {
+  type: ErrorType;
+  message: string;
+  canRetry: boolean;
+}
+
+// Parse error response and categorize it
+function parseError(err: unknown, response?: Response, responseText?: string): ErrorState {
+  // Handle abort/timeout errors
+  if (err instanceof Error && err.name === 'AbortError') {
+    return {
+      type: 'timeout',
+      message: 'The AI analysis is taking longer than expected. This can happen during high traffic or for complex games.',
+      canRetry: true,
+    };
+  }
+
+  // Handle network errors (fetch failed)
+  if (err instanceof TypeError && err.message.includes('fetch')) {
+    return {
+      type: 'network',
+      message: 'Unable to connect to the server. Please check your internet connection.',
+      canRetry: true,
+    };
+  }
+
+  // Handle HTTP status codes
+  if (response) {
+    const status = response.status;
+
+    // Rate limiting
+    if (status === 429) {
+      return {
+        type: 'api_limit',
+        message: 'Too many requests. Please wait a moment before trying again.',
+        canRetry: true,
+      };
+    }
+
+    // Server errors (5xx)
+    if (status >= 500) {
+      // Check for specific Claude API errors in response
+      if (responseText?.includes('overloaded') || responseText?.includes('capacity')) {
+        return {
+          type: 'api_limit',
+          message: 'The AI service is currently experiencing high demand. Please try again shortly.',
+          canRetry: true,
+        };
+      }
+      return {
+        type: 'server',
+        message: 'The server encountered an error. Our team has been notified.',
+        canRetry: true,
+      };
+    }
+
+    // Client errors (4xx)
+    if (status >= 400) {
+      let detail = '';
+      if (responseText) {
+        try {
+          const data = JSON.parse(responseText);
+          detail = data.detail || '';
+        } catch {
+          detail = responseText.substring(0, 100);
+        }
+      }
+      return {
+        type: 'unknown',
+        message: detail || `Request failed (${status})`,
+        canRetry: status !== 400, // Don't retry bad requests
+      };
+    }
+  }
+
+  // Generic error
+  return {
+    type: 'unknown',
+    message: err instanceof Error ? err.message : 'An unexpected error occurred',
+    canRetry: true,
+  };
+}
 
 interface AIAnalysisButtonProps {
   gameId: string;
@@ -17,18 +103,30 @@ export function AIAnalysisButton({
   apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://web-production-e5efb.up.railway.app',
 }: AIAnalysisButtonProps) {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorState | null>(null);
   const [success, setSuccess] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>('claude');
+  const [retryCount, setRetryCount] = useState(0);
 
-  const runAnalysis = async (provider: AIProvider = selectedProvider) => {
+  const runAnalysis = useCallback(async (provider: AIProvider = selectedProvider, isRetry = false) => {
     setLoading(true);
     setError(null);
     setSuccess(false);
 
+    if (isRetry) {
+      setRetryCount(prev => prev + 1);
+    } else {
+      setRetryCount(0);
+    }
+
+    let response: Response | undefined;
+    let responseText: string | undefined;
+
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 minute timeout
+      // Longer timeout for retries (up to 3 minutes)
+      const timeout = isRetry ? 180000 : 120000;
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
 
       const requestUrl = `${apiUrl}/ai-analysis`;
       const requestBody = JSON.stringify({
@@ -39,7 +137,7 @@ export function AIAnalysisButton({
       console.log('Making request to:', requestUrl);
       console.log('Request body:', requestBody);
 
-      const response = await fetch(requestUrl, {
+      response = await fetch(requestUrl, {
         method: 'POST',
         mode: 'cors',
         cache: 'no-cache',
@@ -54,38 +152,27 @@ export function AIAnalysisButton({
       clearTimeout(timeoutId);
 
       // Read response text first to handle empty responses
-      const text = await response.text();
+      responseText = await response.text();
 
       // Log for debugging
       console.log('AI Analysis Response:', {
         status: response.status,
         statusText: response.statusText,
-        textLength: text?.length || 0,
-        textPreview: text?.substring(0, 200),
+        textLength: responseText?.length || 0,
+        textPreview: responseText?.substring(0, 200),
       });
 
       if (!response.ok) {
-        let errorMessage = `Failed (${response.status}): `;
-        if (text) {
-          try {
-            const data = JSON.parse(text);
-            errorMessage += data.detail || text.substring(0, 100);
-          } catch {
-            errorMessage += text.substring(0, 100) || 'Unknown error';
-          }
-        } else {
-          errorMessage += 'Empty response';
-        }
-        throw new Error(errorMessage);
+        throw new Error(`HTTP ${response.status}`);
       }
 
       // Verify we got valid JSON back
-      if (!text) {
+      if (!responseText) {
         throw new Error('Empty response from server');
       }
 
       try {
-        JSON.parse(text); // Validate JSON
+        JSON.parse(responseText); // Validate JSON
       } catch {
         throw new Error('Invalid response format');
       }
@@ -96,18 +183,19 @@ export function AIAnalysisButton({
         window.location.reload();
       }, 1500);
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        setError('Request timed out. The analysis is taking too long.');
-      } else {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      }
+      const errorState = parseError(err, response, responseText);
+      setError(errorState);
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiUrl, gameId, selectedProvider]);
 
   const handleRunAnalysis = () => {
     runAnalysis(selectedProvider);
+  };
+
+  const handleRetry = () => {
+    runAnalysis(selectedProvider, true);
   };
 
   const providerLabel = selectedProvider === 'claude' ? 'Claude' : 'Grok';
@@ -116,7 +204,12 @@ export function AIAnalysisButton({
   if (success) {
     return (
       <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
-        <p className="text-green-400 font-medium">Analysis complete! Refreshing...</p>
+        <div className="flex items-center justify-center gap-2">
+          <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          <p className="text-green-400 font-medium">Analysis complete! Refreshing...</p>
+        </div>
       </div>
     );
   }
@@ -198,9 +291,41 @@ export function AIAnalysisButton({
         )}
       </button>
 
+      {/* Loading progress hint */}
+      {loading && (
+        <p className="text-xs text-gray-500 text-center">
+          AI analysis typically completes within 30-60 seconds
+        </p>
+      )}
+
+      {/* Error State with Retry */}
       {error && (
-        <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <p className="text-red-400 text-sm">{error}</p>
+        <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <div className="flex items-start gap-3">
+            <ErrorIcon type={error.type} />
+            <div className="flex-1">
+              <p className="text-red-400 text-sm font-medium mb-1">
+                {getErrorTitle(error.type)}
+              </p>
+              <p className="text-gray-400 text-sm">{error.message}</p>
+              {error.canRetry && retryCount < 3 && (
+                <button
+                  onClick={handleRetry}
+                  className="mt-3 px-3 py-1.5 text-sm bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-md transition-colors inline-flex items-center gap-2"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  Try Again {retryCount > 0 && `(${retryCount}/3)`}
+                </button>
+              )}
+              {retryCount >= 3 && (
+                <p className="mt-2 text-xs text-gray-500">
+                  Multiple retries failed. Please try again later or contact support.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -209,6 +334,54 @@ export function AIAnalysisButton({
       </p>
     </div>
   );
+}
+
+// Get error title based on error type
+function getErrorTitle(type: ErrorType): string {
+  switch (type) {
+    case 'timeout':
+      return 'Request Timed Out';
+    case 'network':
+      return 'Connection Error';
+    case 'server':
+      return 'Server Error';
+    case 'api_limit':
+      return 'Service Busy';
+    default:
+      return 'Analysis Failed';
+  }
+}
+
+// Error icon based on error type
+function ErrorIcon({ type }: { type: ErrorType }) {
+  const iconClass = "h-5 w-5 text-red-400 flex-shrink-0 mt-0.5";
+
+  switch (type) {
+    case 'timeout':
+      return (
+        <svg className={iconClass} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      );
+    case 'network':
+      return (
+        <svg className={iconClass} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+        </svg>
+      );
+    case 'api_limit':
+      return (
+        <svg className={iconClass} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className={iconClass} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      );
+  }
 }
 
 // Simple SVG icons

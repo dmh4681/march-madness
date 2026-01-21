@@ -1,8 +1,9 @@
 'use client';
 
+import { useId } from 'react';
 import Link from 'next/link';
 import type { TodayGame } from '@/lib/types';
-import { ConfidenceBadge } from './ConfidenceBadge';
+import { ConfidenceBadge, getConfidenceDescription } from './ConfidenceBadge';
 import { formatSpread } from '@/lib/api';
 
 interface PicksListProps {
@@ -11,6 +12,8 @@ interface PicksListProps {
 }
 
 export function PicksList({ games, title = "Today's Top Picks" }: PicksListProps) {
+  const headingId = useId();
+
   // Filter to only games with predictions and sort by edge
   const picks = games
     .filter(
@@ -24,35 +27,63 @@ export function PicksList({ games, title = "Today's Top Picks" }: PicksListProps
 
   if (picks.length === 0) {
     return (
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
-        <p className="text-gray-400 text-center py-4">
+      <section
+        className="bg-gray-900 border border-gray-800 rounded-lg p-6"
+        aria-labelledby={headingId}
+      >
+        <h2 id={headingId} className="text-lg font-semibold text-white mb-4">{title}</h2>
+        <p className="text-gray-400 text-center py-4" role="status">
           No picks for today. Check back when games are analyzed.
         </p>
-      </div>
+      </section>
     );
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-      <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
-      <div className="space-y-3">
-        {picks.map((game) => (
-          <PickCard key={game.id} game={game} />
-        ))}
-      </div>
-    </div>
+    <section
+      className="bg-gray-900 border border-gray-800 rounded-lg p-6"
+      aria-labelledby={headingId}
+    >
+      <h2 id={headingId} className="text-lg font-semibold text-white mb-4">{title}</h2>
+      <nav aria-label="Betting picks navigation">
+        <ul className="space-y-3" role="list">
+          {picks.map((game, index) => (
+            <li key={game.id}>
+              <PickCard game={game} position={index + 1} total={picks.length} />
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </section>
   );
 }
 
-function PickCard({ game }: { game: TodayGame }) {
+interface PickCardProps {
+  game: TodayGame;
+  position: number;
+  total: number;
+}
+
+function PickCard({ game, position, total }: PickCardProps) {
   const isHomePick = game.recommended_bet?.includes('home');
   const pickedTeam = isHomePick ? game.home_team : game.away_team;
+  const opponent = isHomePick ? game.away_team : game.home_team;
   const spread = isHomePick ? game.home_spread : game.home_spread ? -game.home_spread : null;
   const isSpreadBet = game.recommended_bet?.includes('spread');
+  const confidenceDescription = getConfidenceDescription(game.confidence_tier);
+  const betType = isSpreadBet ? `spread ${formatSpread(spread)}` : 'moneyline';
+
+  // Build comprehensive accessible label
+  const accessibleLabel = `Pick ${position} of ${total}: ${pickedTeam} ${betType} versus ${opponent}. ${confidenceDescription}${
+    game.edge_pct && game.edge_pct > 0 ? `, ${game.edge_pct.toFixed(1)} percent edge` : ''
+  }`;
 
   return (
-    <Link href={`/games/${game.id}`}>
+    <Link
+      href={`/games/${game.id}`}
+      aria-label={accessibleLabel}
+      className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded-lg"
+    >
       <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg hover:bg-gray-800 transition-colors">
         <div className="flex items-center gap-3">
           <ConfidenceBadge tier={game.confidence_tier} />
@@ -61,11 +92,11 @@ function PickCard({ game }: { game: TodayGame }) {
               {pickedTeam} {isSpreadBet ? formatSpread(spread) : 'ML'}
             </div>
             <div className="text-sm text-gray-400">
-              vs {isHomePick ? game.away_team : game.home_team}
+              vs {opponent}
             </div>
           </div>
         </div>
-        <div className="text-right">
+        <div className="text-right" aria-hidden="true">
           {game.edge_pct && game.edge_pct > 0 && (
             <div className="text-green-400 font-medium">
               +{game.edge_pct.toFixed(1)}%
@@ -87,56 +118,78 @@ interface StatsCardProps {
 }
 
 export function StatsCard({ seasonRoi, winRate, totalBets, streak }: StatsCardProps) {
+  const headingId = `stats-heading-${Math.random().toString(36).slice(2, 9)}`;
+  const roiLabel = `Return on investment: ${seasonRoi >= 0 ? 'positive ' : 'negative '}${Math.abs(seasonRoi).toFixed(1)} percent`;
+  const streakLabel = streak
+    ? `Current streak: ${streak.count} ${streak.type === 'W' ? 'wins' : 'losses'}`
+    : 'No current streak';
+
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-      <h2 className="text-lg font-semibold text-white mb-4">Season Performance</h2>
-      <div className="grid grid-cols-2 gap-4">
+    <section
+      className="bg-gray-900 border border-gray-800 rounded-lg p-6"
+      aria-labelledby={headingId}
+    >
+      <h2 id={headingId} className="text-lg font-semibold text-white mb-4">Season Performance</h2>
+      <dl className="grid grid-cols-2 gap-4">
         <div>
-          <div className="text-2xl font-bold text-white">
-            <span className={seasonRoi >= 0 ? 'text-green-400' : 'text-red-400'}>
+          <dd className="text-2xl font-bold text-white">
+            <span
+              className={seasonRoi >= 0 ? 'text-green-400' : 'text-red-400'}
+              aria-label={roiLabel}
+            >
               {seasonRoi >= 0 ? '+' : ''}
               {seasonRoi.toFixed(1)}%
             </span>
-          </div>
-          <div className="text-sm text-gray-400">ROI</div>
+          </dd>
+          <dt className="text-sm text-gray-400">ROI</dt>
         </div>
         <div>
-          <div className="text-2xl font-bold text-white">
+          <dd
+            className="text-2xl font-bold text-white"
+            aria-label={`Win rate: ${winRate.toFixed(1)} percent`}
+          >
             {winRate.toFixed(1)}%
-          </div>
-          <div className="text-sm text-gray-400">Win Rate</div>
+          </dd>
+          <dt className="text-sm text-gray-400">Win Rate</dt>
         </div>
         <div>
-          <div className="text-2xl font-bold text-white">{totalBets}</div>
-          <div className="text-sm text-gray-400">Total Bets</div>
+          <dd
+            className="text-2xl font-bold text-white"
+            aria-label={`Total bets: ${totalBets}`}
+          >
+            {totalBets}
+          </dd>
+          <dt className="text-sm text-gray-400">Total Bets</dt>
         </div>
         <div>
           {streak ? (
             <>
-              <div
+              <dd
                 className={`text-2xl font-bold ${
                   streak.type === 'W' ? 'text-green-400' : 'text-red-400'
                 }`}
+                aria-label={streakLabel}
               >
                 {streak.count}
                 {streak.type}
-              </div>
-              <div className="text-sm text-gray-400">Streak</div>
+              </dd>
+              <dt className="text-sm text-gray-400">Streak</dt>
             </>
           ) : (
             <>
-              <div className="text-2xl font-bold text-gray-500">-</div>
-              <div className="text-sm text-gray-400">Streak</div>
+              <dd className="text-2xl font-bold text-gray-500" aria-label={streakLabel}>-</dd>
+              <dt className="text-sm text-gray-400">Streak</dt>
             </>
           )}
         </div>
-      </div>
+      </dl>
       <Link
         href="/performance"
-        className="mt-4 block text-center text-sm text-blue-400 hover:text-blue-300"
+        className="mt-4 block text-center text-sm text-blue-400 hover:text-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
+        aria-label="View detailed performance statistics"
       >
         View detailed stats →
       </Link>
-    </div>
+    </section>
   );
 }

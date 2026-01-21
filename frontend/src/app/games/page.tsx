@@ -1,10 +1,10 @@
-import { format, addDays } from 'date-fns';
+import { addDays } from 'date-fns';
 import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { GameCard } from '@/components/GameCard';
+import { GamesList } from '@/components/GamesList';
 import type { TodayGame } from '@/lib/types';
 
-// Demo data for games listing
+// Demo data for games listing - only first page
 const DEMO_GAMES: TodayGame[] = [
   {
     id: 'demo-1',
@@ -128,16 +128,18 @@ const DEMO_GAMES: TodayGame[] = [
   },
 ];
 
-async function getUpcomingGames(): Promise<TodayGame[]> {
+// Server-side fetch for initial page (first 20 games)
+async function getInitialGames(): Promise<TodayGame[]> {
   if (!isSupabaseConfigured()) {
     return DEMO_GAMES;
   }
 
-  // Use the upcoming_games view which has all the joined data
+  // Fetch first page from the upcoming_games view
   const { data, error } = await supabase
     .from('upcoming_games')
     .select('*')
-    .order('date', { ascending: true });
+    .order('date', { ascending: true })
+    .limit(20);
 
   if (error || !data || data.length === 0) {
     console.error('Error fetching upcoming games:', error);
@@ -147,57 +149,69 @@ async function getUpcomingGames(): Promise<TodayGame[]> {
   return data as TodayGame[];
 }
 
-// Group games by date
-function groupGamesByDate(games: TodayGame[]): Record<string, TodayGame[]> {
-  return games.reduce((acc, game) => {
-    const dateKey = game.date.split('T')[0];
-    if (!acc[dateKey]) {
-      acc[dateKey] = [];
-    }
-    acc[dateKey].push(game);
-    return acc;
-  }, {} as Record<string, TodayGame[]>);
-}
-
 export default async function GamesPage() {
-  const games = await getUpcomingGames();
-  const gamesByDate = groupGamesByDate(games);
+  const initialGames = await getInitialGames();
   const isDemo = !isSupabaseConfigured();
-
-  const highConfidenceCount = games.filter(g => g.confidence_tier === 'high').length;
 
   return (
     <div className="min-h-screen bg-black text-white">
-      {/* Header */}
-      <header className="border-b border-gray-800 bg-gray-900/50">
-        <div className="max-w-7xl mx-auto px-4 py-4">
+      {/* Header - responsive with mobile menu */}
+      <header className="border-b border-gray-800 bg-gray-900/50 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 py-3 sm:py-4">
           <div className="flex items-center justify-between">
-            <div>
-              <Link href="/" className="text-2xl font-bold text-white hover:text-gray-300 transition-colors">
+            <div className="min-w-0 flex-1 sm:flex-initial">
+              <Link href="/" className="text-xl sm:text-2xl font-bold text-white hover:text-gray-300 transition-colors">
                 Conference Contrarian
               </Link>
-              <p className="text-sm text-gray-400">
-                AI-Powered College Basketball Betting Analysis
+              <p className="text-xs sm:text-sm text-gray-400 truncate">
+                AI-Powered CBB Betting
               </p>
             </div>
-            <nav className="flex items-center gap-6">
+            {/* Desktop navigation */}
+            <nav className="hidden sm:flex items-center gap-6" aria-label="Main navigation">
               <Link
                 href="/games"
-                className="text-white font-medium"
+                className="text-white font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
+                aria-current="page"
               >
                 All Games
               </Link>
               <Link
                 href="/march-madness"
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
               >
                 March Madness
               </Link>
               <Link
                 href="/performance"
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
               >
                 Performance
+              </Link>
+            </nav>
+            {/* Mobile navigation */}
+            <nav className="sm:hidden flex items-center gap-1" aria-label="Mobile navigation">
+              <Link
+                href="/games"
+                className="px-3 py-2 min-h-[44px] flex items-center text-sm text-white font-medium"
+                aria-label="All Games"
+                aria-current="page"
+              >
+                Games
+              </Link>
+              <Link
+                href="/march-madness"
+                className="px-3 py-2 min-h-[44px] flex items-center text-sm text-gray-400"
+                aria-label="March Madness"
+              >
+                MM
+              </Link>
+              <Link
+                href="/performance"
+                className="px-3 py-2 min-h-[44px] flex items-center text-sm text-gray-400"
+                aria-label="Performance Stats"
+              >
+                Stats
               </Link>
             </nav>
           </div>
@@ -216,74 +230,40 @@ export default async function GamesPage() {
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Page Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-white mb-2">Upcoming Games</h1>
-          <p className="text-gray-400">
-            {games.length} games over the next 7 days
-            {highConfidenceCount > 0 && (
-              <span className="ml-2 text-green-400">
-                ({highConfidenceCount} high confidence picks)
+      <main id="main-content" className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-8" tabIndex={-1}>
+        {/* Filters - horizontally scrollable on mobile */}
+        <div className="mb-4 sm:mb-6 -mx-3 px-3 sm:mx-0 sm:px-0">
+          <div className="flex gap-2 sm:gap-4 overflow-x-auto pb-2 sm:pb-0 scrollbar-hide">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-green-500/20 text-green-400 rounded cursor-pointer hover:bg-green-500/30 active:bg-green-500/40 transition-colors">
+                High Confidence
               </span>
-            )}
-          </p>
-        </div>
-
-        {/* Filters */}
-        <div className="flex gap-4 mb-6">
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-1 bg-green-500/20 text-green-400 rounded cursor-pointer hover:bg-green-500/30">
-              High Confidence
-            </span>
-            <span className="text-xs px-2 py-1 bg-yellow-500/20 text-yellow-400 rounded cursor-pointer hover:bg-yellow-500/30">
-              Medium
-            </span>
-            <span className="text-xs px-2 py-1 bg-gray-700 text-gray-400 rounded cursor-pointer hover:bg-gray-600">
-              All Games
-            </span>
-          </div>
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs px-2 py-1 bg-blue-500/20 text-blue-400 rounded cursor-pointer hover:bg-blue-500/30">
-              Conference Only
-            </span>
-            <span className="text-xs px-2 py-1 bg-purple-500/20 text-purple-400 rounded cursor-pointer hover:bg-purple-500/30">
-              Ranked Matchups
-            </span>
-          </div>
-        </div>
-
-        {/* Games by Date */}
-        <div className="space-y-8">
-          {Object.entries(gamesByDate).map(([dateStr, dateGames]) => (
-            <div key={dateStr}>
-              <h2 className="text-lg font-semibold text-white mb-4 border-b border-gray-800 pb-2">
-                {format(new Date(dateStr), 'EEEE, MMMM d, yyyy')}
-                <span className="text-sm font-normal text-gray-400 ml-2">
-                  ({dateGames.length} games)
-                </span>
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {dateGames.map((game) => (
-                  <GameCard key={game.id} game={game} />
-                ))}
-              </div>
+              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-yellow-500/20 text-yellow-400 rounded cursor-pointer hover:bg-yellow-500/30 active:bg-yellow-500/40 transition-colors">
+                Medium
+              </span>
+              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-gray-700 text-gray-400 rounded cursor-pointer hover:bg-gray-600 active:bg-gray-500 transition-colors">
+                All Games
+              </span>
             </div>
-          ))}
+            <div className="flex items-center gap-2 shrink-0 sm:ml-auto">
+              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-blue-500/20 text-blue-400 rounded cursor-pointer hover:bg-blue-500/30 active:bg-blue-500/40 transition-colors whitespace-nowrap">
+                Conference Only
+              </span>
+              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-purple-500/20 text-purple-400 rounded cursor-pointer hover:bg-purple-500/30 active:bg-purple-500/40 transition-colors whitespace-nowrap">
+                Ranked Matchups
+              </span>
+            </div>
+          </div>
         </div>
 
-        {games.length === 0 && (
-          <div className="text-center py-12 text-gray-400">
-            <p className="text-lg mb-2">No upcoming games found</p>
-            <p className="text-sm">Check back later for new matchups</p>
-          </div>
-        )}
+        {/* Games List with Load More */}
+        <GamesList initialGames={initialGames} days={7} />
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-gray-800 mt-12">
-        <div className="max-w-7xl mx-auto px-4 py-6">
-          <p className="text-center text-sm text-gray-500">
+      <footer className="border-t border-gray-800 mt-8 sm:mt-12">
+        <div className="max-w-7xl mx-auto px-4 py-4 sm:py-6">
+          <p className="text-center text-xs sm:text-sm text-gray-500">
             For entertainment purposes only. Please gamble responsibly.
           </p>
         </div>

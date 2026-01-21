@@ -316,6 +316,17 @@ export interface AIAnalysisResponse {
   reasoning: string;
 }
 
+// Analytics response for lazy loading
+export interface GameAnalyticsResponse {
+  game_id: string;
+  home_team: string;
+  away_team: string;
+  home_kenpom: KenPomRating | null;
+  away_kenpom: KenPomRating | null;
+  home_haslametrics: HaslametricsRating | null;
+  away_haslametrics: HaslametricsRating | null;
+}
+
 // Utility types
 export type SortDirection = 'asc' | 'desc';
 

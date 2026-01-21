@@ -105,22 +105,22 @@ export default async function Dashboard() {
                 AI-Powered College Basketball Betting Analysis
               </p>
             </div>
-            <nav className="flex items-center gap-6">
+            <nav className="flex items-center gap-6" aria-label="Main navigation">
               <a
                 href="/games"
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
               >
                 All Games
               </a>
               <a
                 href="/march-madness"
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
               >
                 March Madness
               </a>
               <a
                 href="/performance"
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-gray-400 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 rounded"
               >
                 Performance
               </a>
@@ -142,7 +142,7 @@ export default async function Dashboard() {
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main id="main-content" className="max-w-7xl mx-auto px-4 py-8" tabIndex={-1}>
         {/* Date Header */}
         <div className="mb-6">
           <h2 className="text-xl font-semibold text-white">{today}</h2>
