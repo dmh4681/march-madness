@@ -533,10 +533,12 @@ def fetch_haslametrics_ratings(season: int = 2025) -> Optional[list]:
     }
 
     try:
+        # Note: brotli package must be installed for automatic Brotli decompression
+        # Haslametrics serves Content-Encoding: br (Brotli compressed)
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
 
-        # Parse XML
+        # Parse XML (requests auto-decompresses Brotli when brotli package is installed)
         root = ET.fromstring(response.content)
         teams = []
 
