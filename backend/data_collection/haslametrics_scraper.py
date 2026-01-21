@@ -525,8 +525,15 @@ def fetch_haslametrics_ratings(season: int = 2025) -> Optional[list]:
 
     print(f"Fetching Haslametrics data from: {url}")
 
+    # Use proper headers to avoid being blocked
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/xml, text/xml, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     try:
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
 
         # Parse XML
@@ -540,32 +547,34 @@ def fetch_haslametrics_ratings(season: int = 2025) -> Optional[list]:
                 "conference": mr.get("c"),
                 "wins": mr.get("w"),
                 "losses": mr.get("l"),
-                # Efficiency metrics
-                "offensive_efficiency": mr.get("ou"),  # Offensive rating
-                "defensive_efficiency": mr.get("du"),  # Defensive rating
+                # Efficiency metrics (ou/du are offensive/defensive units)
+                "offensive_efficiency": mr.get("ou"),
+                "defensive_efficiency": mr.get("du"),
                 # Shooting percentages
                 "ft_pct": mr.get("ftpct"),
-                "fg_pct": mr.get("fgpct"),
-                "three_pct": mr.get("tppct"),
-                # Pace and momentum
-                "pace": mr.get("pace"),
+                "dft_pct": mr.get("dftpct"),  # Defensive FT% allowed
+                # Momentum metrics
                 "momentum_overall": mr.get("mom"),
-                "momentum_offense": mr.get("omom"),
-                "momentum_defense": mr.get("dmom"),
+                "momentum_offense": mr.get("mmo"),  # Correct attribute name
+                "momentum_defense": mr.get("mmd"),  # Correct attribute name
                 # Quality metrics
-                "consistency": mr.get("con"),
+                "consistency": mr.get("inc"),  # Inconsistency metric (lower = more consistent)
                 "sos": mr.get("sos"),
-                "sos_rank": mr.get("sosr"),
-                "record_quality": mr.get("rq"),
                 "rpi": mr.get("rpi"),
-                "all_play_pct": mr.get("ap"),  # All-Play Percentage
+                "all_play_pct": mr.get("ap"),  # All-Play Percentage (core metric)
+                "win_rate": mr.get("wr"),
                 # Recent performance
                 "last_5_record": mr.get("p5wl"),
-                # Quadrant records
+                "last_5_trend": mr.get("p5ud"),  # Up/down trend
+                # Quadrant records (NET-based)
                 "quad_1_record": mr.get("r_q1"),
                 "quad_2_record": mr.get("r_q2"),
                 "quad_3_record": mr.get("r_q3"),
                 "quad_4_record": mr.get("r_q4"),
+                # Home/Away/Neutral records
+                "home_record": mr.get("r_home"),
+                "away_record": mr.get("r_away"),
+                "neutral_record": mr.get("r_neut"),
             }
             teams.append(team_data)
 
@@ -627,16 +636,11 @@ def store_haslametrics_ratings(teams: list, season: int) -> dict:
                 "defensive_efficiency": de,
                 "efficiency_margin": efficiency_margin,
                 "ft_pct": safe_float(team_data.get("ft_pct")),
-                "fg_pct": safe_float(team_data.get("fg_pct")),
-                "three_pct": safe_float(team_data.get("three_pct")),
-                "pace": safe_float(team_data.get("pace")),
                 "momentum_overall": safe_float(team_data.get("momentum_overall")),
                 "momentum_offense": safe_float(team_data.get("momentum_offense")),
                 "momentum_defense": safe_float(team_data.get("momentum_defense")),
                 "consistency": safe_float(team_data.get("consistency")),
                 "sos": safe_float(team_data.get("sos")),
-                "sos_rank": safe_int(team_data.get("sos_rank")),
-                "record_quality": safe_float(team_data.get("record_quality")),
                 "rpi": safe_float(team_data.get("rpi")),
                 "all_play_pct": safe_float(team_data.get("all_play_pct")),
                 "last_5_record": team_data.get("last_5_record"),
