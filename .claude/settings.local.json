@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Bash(npm run build:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix Haslametrics scraper: add User-Agent headers and correct XML attributes\n\n- Added proper HTTP headers to avoid being blocked by server\n- Fixed XML attribute names to match actual Haslametrics data structure\n  \\(mmo/mmd for momentum, inc for consistency, etc.\\)\n- Removed non-existent fields \\(fg_pct, three_pct, pace, sos_rank, record_quality\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push)",
+      "Bash(git check-ignore:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
