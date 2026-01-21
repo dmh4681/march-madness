@@ -515,6 +515,31 @@ def regenerate_predictions():
         raise HTTPException(status_code=500, detail=f"Failed: {str(e)}")
 
 
+@app.post("/refresh-haslametrics")
+def refresh_haslametrics_endpoint():
+    """
+    Quick endpoint to refresh only Haslametrics data.
+    Much faster than full /refresh - useful for testing.
+    """
+    try:
+        from ..data_collection.haslametrics_scraper import refresh_haslametrics_data
+
+        results = refresh_haslametrics_data(season=2025)
+
+        return {
+            "status": results.get("status", "success"),
+            "timestamp": results.get("timestamp"),
+            "results": results,
+        }
+    except ImportError as e:
+        return {
+            "status": "error",
+            "error": f"Import error: {str(e)}",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Haslametrics refresh failed: {str(e)}")
+
+
 @app.get("/backtest")
 def backtest(
     start_date: str,
