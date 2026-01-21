@@ -19,7 +19,6 @@ from functools import wraps
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
-import httpx
 
 load_dotenv()
 
@@ -73,21 +72,10 @@ def get_supabase() -> Client:
         if not _validate_supabase_url(SUPABASE_URL):
             raise ValueError("Invalid SUPABASE_URL format")
 
-        # Create client with timeout configuration
-        # The Supabase SDK uses httpx internally, which supports connection pooling
-        _client = create_client(
-            SUPABASE_URL,
-            SUPABASE_KEY,
-            options={
-                "headers": {
-                    # SECURITY: Identify our application in requests
-                    "X-Client-Info": "conference-contrarian-backend",
-                },
-                # Note: The Supabase Python SDK handles connection pooling internally
-                # through httpx. These options are passed to the underlying HTTP client.
-            }
-        )
-        logger.info("Supabase client initialized with secure configuration")
+        # Create client - Supabase SDK handles connection pooling internally via httpx
+        # Note: Custom options require ClientOptions object, keeping it simple here
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        logger.info("Supabase client initialized")
 
     return _client
 
