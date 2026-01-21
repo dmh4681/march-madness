@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-**Conference Contrarian** is a full-stack college basketball betting analysis application. It uses AI (Claude) to analyze games and provide betting recommendations, with a focus on finding edges in the NCAA basketball betting market.
+**Conference Contrarian** is a full-stack college basketball betting analysis application. It uses AI (Claude and Grok) to analyze games and provide betting recommendations, with a focus on finding edges in the NCAA basketball betting market using advanced analytics from KenPom and Haslametrics.
+
+**Live Site:** https://confcontrarian.com
 
 ## Tech Stack
 
@@ -11,9 +13,9 @@
 | Frontend | Next.js 16, TypeScript, Tailwind CSS | Vercel |
 | Backend API | FastAPI, Python 3.11 | Railway |
 | Database | PostgreSQL via Supabase | Supabase |
-| AI Analysis | Claude API (Anthropic) | Via Railway backend |
-| Data Sources | The Odds API, CBBpy, KenPom | APIs |
-| Advanced Analytics | KenPom (kenpompy) | Via Railway backend |
+| AI Analysis | Claude API (Anthropic), Grok API (xAI) | Via Railway backend |
+| Data Sources | The Odds API, CBBpy | APIs |
+| Advanced Analytics | KenPom (kenpompy), Haslametrics (XML) | Via Railway backend |
 
 ## Project Structure
 
@@ -33,7 +35,7 @@ march-madness/
 │   │   │   ├── ConfidenceBadge.tsx
 │   │   │   ├── PicksList.tsx
 │   │   │   ├── AIAnalysis.tsx
-│   │   │   └── AIAnalysisButton.tsx  # Triggers Claude analysis
+│   │   │   └── AIAnalysisButton.tsx  # Triggers Claude/Grok analysis
 │   │   └── lib/
 │   │       ├── supabase.ts     # Supabase client with fallback
 │   │       ├── types.ts        # TypeScript interfaces
@@ -42,12 +44,13 @@ march-madness/
 │
 ├── backend/
 │   ├── api/
-│   │   ├── main.py             # FastAPI application
-│   │   ├── supabase_client.py  # Database operations
-│   │   └── ai_service.py       # Claude/Grok integration
+│   │   ├── main.py             # FastAPI application (with security middleware)
+│   │   ├── supabase_client.py  # Database operations (with input validation)
+│   │   └── ai_service.py       # Claude + Grok integration
 │   ├── data_collection/
 │   │   ├── daily_refresh.py    # Daily data pipeline
 │   │   ├── kenpom_scraper.py   # KenPom advanced analytics
+│   │   ├── haslametrics_scraper.py  # Haslametrics analytics (FREE)
 │   │   ├── migrate_to_supabase.py  # Data migration
 │   │   ├── scraper.py          # CBBpy data collection
 │   │   └── rankings.py         # AP rankings scraper
@@ -60,7 +63,8 @@ march-madness/
 │   └── migrations/             # SQL schema files
 │       ├── 20250118000000_initial_schema.sql
 │       ├── 20250118000001_today_games_view.sql
-│       └── 20250119000000_kenpom_ratings.sql
+│       ├── 20250119000000_kenpom_ratings.sql
+│       └── 20250121000000_haslametrics_ratings.sql
 │
 ├── .github/
 │   └── workflows/
@@ -82,8 +86,10 @@ march-madness/
 | `/games` | GET | Upcoming games (7 days) |
 | `/games/{id}` | GET | Single game details |
 | `/predict` | POST | Get prediction for a game |
-| `/ai-analysis` | POST | Run Claude AI analysis on a game |
-| `/refresh` | POST | Trigger daily data refresh |
+| `/ai-analysis` | POST | Run Claude or Grok AI analysis (provider param) |
+| `/refresh` | POST | Trigger full daily data refresh |
+| `/refresh-haslametrics` | POST | Refresh only Haslametrics data (fast) |
+| `/regenerate-predictions` | POST | Regenerate predictions only |
 | `/stats` | GET | Season performance statistics |
 | `/rankings` | GET | Current AP rankings |
 
@@ -92,17 +98,19 @@ march-madness/
 **Core Tables:**
 - `teams` - 416 NCAA teams with conferences
 - `games` - 6,400+ games (2020-2025)
-- `spreads` - Betting lines from The Odds API
+- `spreads` - Betting lines from The Odds API (spread + moneyline)
 - `rankings` - AP poll rankings by week
 - `predictions` - Model predictions per game
-- `ai_analysis` - Claude/Grok analysis results
+- `ai_analysis` - Claude/Grok analysis results (ai_provider field distinguishes)
 - `bet_results` - Tracking actual bet outcomes
-- `kenpom_ratings` - KenPom advanced analytics (AdjO, AdjD, tempo, SOS, etc.)
+- `kenpom_ratings` - KenPom advanced analytics (AdjO, AdjD, tempo, SOS, luck)
+- `haslametrics_ratings` - Haslametrics analytics (All-Play %, momentum, efficiency)
 
 **Views:**
 - `today_games` - Today's games with all joined data
 - `upcoming_games` - Next 7 days of games
 - `latest_kenpom_ratings` - Most recent KenPom data per team
+- `latest_haslametrics_ratings` - Most recent Haslametrics data per team
 
 ## Environment Variables
 
@@ -120,10 +128,10 @@ NEXT_PUBLIC_API_URL=https://web-production-e5efb.up.railway.app
 SUPABASE_URL=
 SUPABASE_SERVICE_KEY=
 ANTHROPIC_API_KEY=
-GROK_API_KEY= (optional)
+GROK_API_KEY=
 ODDS_API_KEY=
 REFRESH_API_KEY= (optional, for cron auth)
-ALLOWED_ORIGINS=https://your-vercel-app.vercel.app
+ALLOWED_ORIGINS=https://confcontrarian.com,https://www.confcontrarian.com
 
 # KenPom Integration (requires subscription)
 KENPOM_EMAIL=
@@ -144,77 +152,113 @@ cd backend
 pip install -r ../requirements.txt
 uvicorn backend.api.main:app --reload  # Start on localhost:8000
 
-# Run data migration
-python -m backend.data_collection.migrate_to_supabase
-
-# Trigger daily refresh
+# Run data refresh
 python -m backend.data_collection.daily_refresh
+
+# Refresh just Haslametrics (fast, no login required)
+python -m backend.data_collection.haslametrics_scraper
+
+# Refresh just KenPom (requires subscription)
+python -m backend.data_collection.kenpom_scraper
 ```
 
 ## Data Flow
 
 1. **Daily at 6 AM EST** - GitHub Actions triggers `/refresh`
 2. **Refresh Pipeline:**
-   - Fetches spreads from The Odds API
+   - Fetches spreads + moneylines from The Odds API
    - Refreshes KenPom advanced analytics (if credentials configured)
+   - Refreshes Haslametrics analytics (FREE - no login required)
    - Creates/updates games in Supabase
    - Runs predictions on upcoming games
-   - Runs Claude AI analysis on today's games (includes KenPom data)
+   - Runs Claude AI analysis on today's games
 3. **Frontend** reads from Supabase views
-4. **Users** can trigger AI analysis on-demand via button
+4. **Users** can trigger AI analysis on-demand via button (Claude or Grok)
 
 ## AI Analysis
 
-The AI service (`backend/api/ai_service.py`) uses Claude to analyze games:
+The AI service (`backend/api/ai_service.py`) uses Claude and Grok to analyze games:
 
-- Builds context with team rankings, spread, venue, conference
-- **Includes KenPom data when available:** AdjO, AdjD, efficiency margin, tempo, SOS, luck
-- Sends structured prompt asking for betting recommendation
-- When KenPom data is present, prompts Claude to use efficiency differentials for spread predictions
-- Parses JSON response with: recommended_bet, confidence_score, key_factors, reasoning
-- Stores analysis in `ai_analysis` table
+### Dual-Provider System
+- **Claude** (Anthropic) - Primary AI provider
+- **Grok** (xAI) - Secondary AI for comparison, uses OpenAI-compatible API
+
+### Analysis Flow
+1. Builds context with team rankings, spread, moneylines, venue, conference
+2. Includes **KenPom data** when available: AdjO, AdjD, efficiency margin, tempo, SOS, luck
+3. Includes **Haslametrics data** when available: All-Play %, momentum (O/D), efficiency, quadrant records
+4. When both analytics sources available, prompt instructs AI to cross-validate
+5. Parses JSON response with: recommended_bet, confidence_score, key_factors, reasoning
+6. Stores analysis in `ai_analysis` table with `ai_provider` field
 
 ### KenPom Integration
+- Requires paid subscription credentials
+- Uses `kenpompy` library with Selenium browser automation
+- Fetches: AdjO, AdjD, AdjEM, Tempo, SOS, Luck for 350+ teams
+- Stored in `kenpom_ratings` table with daily snapshots
 
-The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpompy` library:
-
-- Requires KenPom subscription credentials (KENPOM_EMAIL, KENPOM_PASSWORD)
-- Fetches all 350+ team ratings including:
-  - Adjusted Offensive Efficiency (AdjO)
-  - Adjusted Defensive Efficiency (AdjD)
-  - Adjusted Efficiency Margin (AdjEM = AdjO - AdjD)
-  - Adjusted Tempo
-  - Strength of Schedule
-  - Luck factor
-- Stores in `kenpom_ratings` table with daily snapshots
-- AI analysis prompt is enhanced when KenPom data is available
+### Haslametrics Integration
+- **FREE** - no subscription required
+- Fetches from XML endpoint: `https://haslametrics.com/ratings{YY}.xml`
+- Uses "All-Play Percentage" methodology (win % vs average D1 team)
+- Key metrics: All-Play %, Momentum (overall/offense/defense), Efficiency, Quadrant records
+- Requires `brotli` package for Brotli decompression (server uses `Content-Encoding: br`)
+- Stored in `haslametrics_ratings` table with daily snapshots
 
 ## Current Status
 
 **Working:**
 - Dashboard with table view of today's games and AI-powered picks
-- Game detail pages with full AI analysis (Claude)
-- "Run AI Analysis" button on game pages
+- Game detail pages with full AI analysis
+- **Dual AI providers:** Claude and Grok analysis on every game
+- **Dual analytics sources:** KenPom AND Haslametrics data displayed
+- "Run AI Analysis" button with provider selection (Claude/Grok)
 - Daily refresh pipeline (GitHub Actions)
 - KenPom advanced analytics integration
-- AI analysis enhanced with KenPom data (AdjO, AdjD, tempo, SOS, luck)
+- Haslametrics advanced analytics integration (FREE)
+- AI analysis enhanced with both KenPom and Haslametrics data
+- AI cross-validates between analytics sources when both available
 - SQL views prioritize AI analysis over baseline predictions
 - Spread-based probability heuristics for baseline model
 - Compact table view with games showing Pick, Confidence, and Edge
+- Moneyline data capture and display
+- Custom domain: confcontrarian.com
+- Security hardening (CORS validation, input sanitization, error handling)
 
 **In Progress:**
 - Performance tracking page (placeholder, needs real data)
 - March Madness bracket page (placeholder, ready for Selection Sunday)
 
-**Pending/Future:**
-- Grok AI analysis (secondary AI for comparison) - see implementation plan
-- Haslametrics integration (requires Selenium scraping) - see implementation plan
-- User authentication (Supabase Auth)
-- Payment/subscription (Stripe)
-- Custom domain
-- Bet result tracking
-- Email notifications for high-confidence picks
-- Mobile app
+## Roadmap / Future Features
+
+### Phase 1: Authentication & User Accounts
+- Supabase Auth integration
+- User profiles
+- Saved preferences (favorite teams, notification settings)
+
+### Phase 2: Bet Tracking System
+- "Bet Card" feature - users can add picks to their card
+- Track bet outcomes (win/loss/push)
+- Personal performance metrics:
+  - Win rate by confidence tier
+  - ROI tracking
+  - Streak tracking
+  - Units won/lost
+- Historical bet history
+
+### Phase 3: Subscription/Paywall
+- Stripe integration
+- Tiered access:
+  - Free: Basic game info, limited AI analysis
+  - Pro: Full AI analysis, both providers, advanced analytics
+  - Premium: Alerts, custom filters, API access
+- Trial period
+
+### Phase 4: Enhanced Features
+- Email/push notifications for high-confidence picks
+- Custom filters (by conference, ranked teams only, etc.)
+- Historical backtesting results
+- Mobile app (React Native)
 
 ## Common Tasks
 
@@ -233,6 +277,14 @@ The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpo
 2. Run SQL in Supabase dashboard
 3. Update TypeScript types in `frontend/src/lib/types.ts`
 
+### Add a new analytics source
+1. Create scraper in `backend/data_collection/`
+2. Create database migration for new table
+3. Update `daily_refresh.py` to include new scraper
+4. Update `ai_service.py` to fetch data in `build_game_context()`
+5. Update `build_analysis_prompt()` to include new data
+6. Update frontend types and display components
+
 ## Notes
 
 - Frontend shows empty states when Supabase isn't configured (no demo data)
@@ -240,184 +292,51 @@ The KenPom scraper (`backend/data_collection/kenpom_scraper.py`) uses the `kenpo
 - Railway auto-deploys on git push
 - Vercel auto-deploys on git push
 - KenPom requires paid subscription - scraper uses browser automation via Selenium
-- AI analysis is stored in `ai_analysis` table with `ai_provider` field to distinguish Claude vs Grok
-
-## Implementation Plan: Grok + Haslametrics
-
-### Phase 1: Grok AI Integration
-
-**Goal:** Add Grok as a secondary AI provider to compare analysis with Claude.
-
-**Backend Changes (`backend/api/ai_service.py`):**
-```python
-# 1. Add Grok API client (uses OpenAI-compatible API)
-import openai
-
-class AIAnalyzer:
-    def __init__(self):
-        self.claude_client = anthropic.Anthropic()
-        self.grok_client = openai.OpenAI(
-            api_key=os.getenv("GROK_API_KEY"),
-            base_url="https://api.x.ai/v1"  # Grok API endpoint
-        )
-
-    def _grok_analyze(self, prompt: str) -> dict:
-        response = self.grok_client.chat.completions.create(
-            model="grok-beta",  # or latest Grok model
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3
-        )
-        return self._parse_response(response.choices[0].message.content)
-```
-
-**API Endpoint Updates (`backend/api/main.py`):**
-- Add `provider` parameter to `/ai-analysis` endpoint (default: "claude")
-- Add `/ai-analysis/compare` endpoint that runs both Claude and Grok
-
-**Frontend Changes:**
-- Update `AIAnalysisButton.tsx` to allow provider selection
-- Update `AIAnalysis.tsx` to show side-by-side comparison when both analyses exist
-- Add "Run Grok Analysis" option on game detail page
-
-**Database:**
-- `ai_analysis` table already has `ai_provider` column - no schema changes needed
-
-**Environment Variables:**
-- Add `GROK_API_KEY` to Railway
-
-**Estimated Work:**
-- Backend: Update ai_service.py with Grok client
-- Backend: Add provider param to endpoint
-- Frontend: Add provider toggle/button
-- Frontend: Side-by-side analysis display
-- Deploy and test
-
----
-
-### Phase 2: Haslametrics Integration
-
-**Goal:** Add Haslametrics advanced metrics alongside KenPom.
-
-**Challenge:** No public API - requires Selenium scraping like KenPom.
-
-**Backend Changes (`backend/data_collection/haslametrics_scraper.py`):**
-```python
-# New file: Haslametrics scraper
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-import time
-
-def scrape_haslametrics(season: int = 2025) -> list[dict]:
-    """
-    Scrapes Haslametrics ratings.
-    URL: https://haslametrics.com/ratings.php
-
-    Key metrics to capture:
-    - Team ranking
-    - Predictive rating
-    - True tempo
-    - Offensive efficiency
-    - Defensive efficiency
-    - Recent form rating
-    - Strength of schedule
-    """
-    driver = webdriver.Chrome(options=chrome_options)
-    driver.get("https://haslametrics.com/ratings.php")
-
-    # Wait for table to load
-    time.sleep(2)
-
-    # Parse ratings table
-    rows = driver.find_elements(By.CSS_SELECTOR, "table.ratings tbody tr")
-    ratings = []
-    for row in rows:
-        cols = row.find_elements(By.TAG_NAME, "td")
-        ratings.append({
-            "rank": int(cols[0].text),
-            "team": cols[1].text,
-            "predictive_rating": float(cols[2].text),
-            # ... more fields
-        })
-
-    driver.quit()
-    return ratings
-```
-
-**Database Schema:**
-```sql
--- New migration: supabase/migrations/20250121000000_haslametrics_ratings.sql
-CREATE TABLE haslametrics_ratings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    team_id UUID REFERENCES teams(id),
-    season INTEGER NOT NULL,
-    rank INTEGER,
-    predictive_rating DECIMAL(6,2),
-    true_tempo DECIMAL(4,1),
-    offensive_efficiency DECIMAL(5,1),
-    defensive_efficiency DECIMAL(5,1),
-    recent_form DECIMAL(4,2),
-    sos_rank INTEGER,
-    captured_at TIMESTAMPTZ DEFAULT NOW(),
-    captured_date DATE DEFAULT CURRENT_DATE,
-    UNIQUE(team_id, season, captured_date)
-);
-
-CREATE INDEX idx_haslametrics_team_season ON haslametrics_ratings(team_id, season);
-```
-
-**AI Analysis Enhancement:**
-- Update `build_analysis_prompt()` to include Haslametrics when available
-- Add predictive rating differential to prompt
-- Include recent form in context
-
-**Frontend Changes:**
-- Add Haslametrics panel to game detail page (similar to KenPom panel)
-- Show predictive rating comparison
-
-**Daily Refresh:**
-- Add `refresh_haslametrics()` to daily pipeline
-- Run after KenPom refresh (both use Selenium)
-
-**Estimated Work:**
-1. Create Selenium scraper for Haslametrics
-2. Create database migration
-3. Update TypeScript types
-4. Update AI prompt with Haslametrics data
-5. Add Haslametrics panel to game detail page
-6. Add to daily refresh pipeline
-7. Test and deploy
-
----
-
-### Implementation Order
-
-1. **Grok (simpler, faster win):**
-   - Has official API (OpenAI-compatible)
-   - Database already supports multiple providers
-   - Can be deployed incrementally
-
-2. **Haslametrics (more complex):**
-   - Requires Selenium scraping
-   - New database table needed
-   - More testing required
-   - Can run in parallel with KenPom scraper
-
-### Prerequisites
-
-- Grok API key (from x.ai)
-- Haslametrics is free (no login required)
-- Chrome/Chromium for Selenium on Railway
+- Haslametrics is FREE - uses direct XML endpoint with Brotli compression
+- AI analysis stored in `ai_analysis` table with `ai_provider` field (claude/grok)
+- Both AI providers receive identical prompts with all available analytics data
 
 ## Troubleshooting
 
 ### 405 Method Not Allowed on AI Analysis
 - Check that `NEXT_PUBLIC_API_URL` in Vercel includes `https://`
-- Check that `ALLOWED_ORIGINS` in Railway includes your exact Vercel URL
+- Check that `ALLOWED_ORIGINS` in Railway includes your exact domain(s)
 
 ### KenPom data all NULL
 - Ensure using `get_pomeroy_ratings()` not `get_efficiency()` in kenpom_scraper.py
 - Check Railway logs for actual column names returned by kenpompy
 
+### Haslametrics fetch fails
+- Ensure `brotli` package is installed (server returns Brotli-compressed XML)
+- Check User-Agent headers are set (server blocks requests without them)
+- Test endpoint directly: `curl https://web-production-e5efb.up.railway.app/refresh-haslametrics`
+
 ### React Hydration Error #418
 - Usually caused by `new Date()` in server components (different on server vs client)
 - Use static dates or move date logic to client components
+
+### Full refresh timeout (502 error)
+- Full `/refresh` can take 5+ minutes (KenPom login, all scrapers, AI analysis)
+- Use individual endpoints for testing: `/refresh-haslametrics`, `/regenerate-predictions`
+- Railway may timeout long-running requests - consider background job architecture
+
+## Security Features
+
+The codebase includes security hardening:
+
+### Backend (`main.py`)
+- CORS origin validation (rejects wildcards, validates format)
+- Global exception handler (logs errors server-side, returns generic messages to client)
+- Input validation on all endpoints
+- Rate limiting ready (can be added)
+
+### Database (`supabase_client.py`)
+- UUID validation on all ID parameters
+- String sanitization (length limits, null byte removal)
+- Parameterized queries via Supabase SDK
+- Service key kept server-side only
+
+### General
+- No secrets in client-side code
+- HTTPS enforced on all endpoints
+- Logging avoids leaking sensitive data
