@@ -205,27 +205,28 @@ export interface KenPomRating {
 }
 
 // Haslametrics Advanced Analytics (FREE alternative to KenPom)
+// Uses "All-Play Percentage" methodology instead of pure efficiency
 export interface HaslametricsRating {
   id: string;
   team_id: string;
   season: number;
   rank: number | null;
+  // Efficiency metrics
   offensive_efficiency: number | null;
   defensive_efficiency: number | null;
-  efficiency_margin: number | null;
+  efficiency_margin: number | null;  // Calculated: off - def
+  // Shooting
   ft_pct: number | null;
-  fg_pct: number | null;
-  three_pct: number | null;
-  pace: number | null;
+  // Momentum (trending performance)
   momentum_overall: number | null;
   momentum_offense: number | null;
   momentum_defense: number | null;
-  consistency: number | null;
-  sos: number | null;
-  sos_rank: number | null;
-  record_quality: number | null;
+  // Quality metrics
+  consistency: number | null;  // Lower = more consistent
+  sos: number | null;          // Strength of Schedule
   rpi: number | null;
-  all_play_pct: number | null;
+  all_play_pct: number | null; // Core metric: win % vs average team
+  // Record breakdown
   last_5_record: string | null;
   quad_1_record: string | null;
   quad_2_record: string | null;
