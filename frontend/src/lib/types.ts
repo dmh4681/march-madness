@@ -204,6 +204,40 @@ export interface KenPomRating {
   captured_date: string;
 }
 
+// Haslametrics Advanced Analytics (FREE alternative to KenPom)
+export interface HaslametricsRating {
+  id: string;
+  team_id: string;
+  season: number;
+  rank: number | null;
+  offensive_efficiency: number | null;
+  defensive_efficiency: number | null;
+  efficiency_margin: number | null;
+  ft_pct: number | null;
+  fg_pct: number | null;
+  three_pct: number | null;
+  pace: number | null;
+  momentum_overall: number | null;
+  momentum_offense: number | null;
+  momentum_defense: number | null;
+  consistency: number | null;
+  sos: number | null;
+  sos_rank: number | null;
+  record_quality: number | null;
+  rpi: number | null;
+  all_play_pct: number | null;
+  last_5_record: string | null;
+  quad_1_record: string | null;
+  quad_2_record: string | null;
+  quad_3_record: string | null;
+  quad_4_record: string | null;
+  wins: number | null;
+  losses: number | null;
+  conference: string | null;
+  captured_at: string;
+  captured_date: string;
+}
+
 // View types
 export interface TodayGame {
   id: string;
@@ -247,6 +281,8 @@ export interface GameWithDetails extends Game {
   away_ranking: Ranking | null;
   home_kenpom: KenPomRating | null;
   away_kenpom: KenPomRating | null;
+  home_haslametrics: HaslametricsRating | null;
+  away_haslametrics: HaslametricsRating | null;
   prediction: Prediction | null;
   ai_analyses: AIAnalysis[];
 }

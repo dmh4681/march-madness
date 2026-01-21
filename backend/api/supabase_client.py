@@ -364,6 +364,15 @@ def get_team_kenpom(team_id: str, season: int = 2025) -> Optional[dict]:
     return result.data[0] if result.data else None
 
 
+def get_team_haslametrics(team_id: str, season: int = 2025) -> Optional[dict]:
+    """Get the latest Haslametrics rating for a team."""
+    client = get_supabase()
+    result = client.table("haslametrics_ratings").select("*").eq(
+        "team_id", team_id
+    ).eq("season", season).order("captured_at", desc=True).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
 def calculate_season_stats(season: int) -> dict:
     """Calculate comprehensive season statistics."""
     client = get_supabase()

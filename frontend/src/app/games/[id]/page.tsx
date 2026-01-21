@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, GameStatus, KenPomRating } from '@/lib/types';
+import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, GameStatus, KenPomRating, HaslametricsRating } from '@/lib/types';
 import { formatSpread, formatMoneyline, formatProbability } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AIAnalysisPanel } from '@/components/AIAnalysis';
@@ -99,6 +99,34 @@ async function getGame(id: string): Promise<GameWithDetails | null> {
       awayKenpom = data;
     }
 
+    // Fetch Haslametrics ratings
+    let homeHaslametrics = null;
+    let awayHaslametrics = null;
+
+    if (g.home_team_id) {
+      const { data } = await supabase
+        .from('haslametrics_ratings')
+        .select('*')
+        .eq('team_id', g.home_team_id as string)
+        .eq('season', g.season as number)
+        .order('captured_at', { ascending: false })
+        .limit(1)
+        .single();
+      homeHaslametrics = data;
+    }
+
+    if (g.away_team_id) {
+      const { data } = await supabase
+        .from('haslametrics_ratings')
+        .select('*')
+        .eq('team_id', g.away_team_id as string)
+        .eq('season', g.season as number)
+        .order('captured_at', { ascending: false })
+        .limit(1)
+        .single();
+      awayHaslametrics = data;
+    }
+
     // Fetch prediction
     const { data: prediction } = await supabase
       .from('predictions')
@@ -141,6 +169,8 @@ async function getGame(id: string): Promise<GameWithDetails | null> {
       away_ranking: awayRanking ? (awayRanking as unknown as Ranking) : null,
       home_kenpom: homeKenpom ? (homeKenpom as unknown as KenPomRating) : null,
       away_kenpom: awayKenpom ? (awayKenpom as unknown as KenPomRating) : null,
+      home_haslametrics: homeHaslametrics ? (homeHaslametrics as unknown as HaslametricsRating) : null,
+      away_haslametrics: awayHaslametrics ? (awayHaslametrics as unknown as HaslametricsRating) : null,
       prediction: prediction ? (prediction as unknown as Prediction) : null,
       ai_analyses: aiAnalyses ? (aiAnalyses as unknown as AIAnalysis[]) : [],
     };
@@ -553,6 +583,134 @@ export default async function GameDetailPage({ params }: PageProps) {
 
                 <div className="text-xs text-gray-500 mt-4 text-center">
                   Data from KenPom.com
+                </div>
+              </div>
+            )}
+
+            {/* Haslametrics Analytics */}
+            {(game.home_haslametrics || game.away_haslametrics) && (
+              <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
+                <h3 className="text-lg font-semibold text-white mb-1">
+                  Haslametrics Analytics
+                </h3>
+                <p className="text-xs text-gray-500 mb-4">All-Play Methodology (FREE)</p>
+                <div className="space-y-3">
+                  {/* Haslametrics Rank */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="text-right font-medium text-white">
+                      #{game.away_haslametrics?.rank ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Rank</div>
+                    <div className="text-left font-medium text-white">
+                      #{game.home_haslametrics?.rank ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* All-Play % - unique Haslametrics metric */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_haslametrics?.all_play_pct ?? 0) > (game.home_haslametrics?.all_play_pct ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_haslametrics?.all_play_pct?.toFixed(1) ?? 'N/A'}%
+                    </div>
+                    <div className="text-center text-gray-400">All-Play %</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_haslametrics?.all_play_pct ?? 0) > (game.away_haslametrics?.all_play_pct ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_haslametrics?.all_play_pct?.toFixed(1) ?? 'N/A'}%
+                    </div>
+                  </div>
+
+                  {/* Momentum - trending indicator */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_haslametrics?.momentum_overall ?? 0) > 0 ? 'text-green-400' :
+                      (game.away_haslametrics?.momentum_overall ?? 0) < 0 ? 'text-red-400' : 'text-white'
+                    }`}>
+                      {game.away_haslametrics?.momentum_overall != null
+                        ? (game.away_haslametrics.momentum_overall > 0 ? '+' : '') + game.away_haslametrics.momentum_overall.toFixed(3)
+                        : 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Momentum</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_haslametrics?.momentum_overall ?? 0) > 0 ? 'text-green-400' :
+                      (game.home_haslametrics?.momentum_overall ?? 0) < 0 ? 'text-red-400' : 'text-white'
+                    }`}>
+                      {game.home_haslametrics?.momentum_overall != null
+                        ? (game.home_haslametrics.momentum_overall > 0 ? '+' : '') + game.home_haslametrics.momentum_overall.toFixed(3)
+                        : 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Offensive Efficiency */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_haslametrics?.offensive_efficiency ?? 0) > (game.home_haslametrics?.offensive_efficiency ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_haslametrics?.offensive_efficiency?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Off Eff</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_haslametrics?.offensive_efficiency ?? 0) > (game.away_haslametrics?.offensive_efficiency ?? 0)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_haslametrics?.offensive_efficiency?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Defensive Efficiency (lower is better) */}
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className={`text-right font-medium ${
+                      (game.away_haslametrics?.defensive_efficiency ?? 999) < (game.home_haslametrics?.defensive_efficiency ?? 999)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.away_haslametrics?.defensive_efficiency?.toFixed(1) ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Def Eff</div>
+                    <div className={`text-left font-medium ${
+                      (game.home_haslametrics?.defensive_efficiency ?? 999) < (game.away_haslametrics?.defensive_efficiency ?? 999)
+                        ? 'text-green-400'
+                        : 'text-white'
+                    }`}>
+                      {game.home_haslametrics?.defensive_efficiency?.toFixed(1) ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Last 5 */}
+                  <div className="grid grid-cols-3 gap-2 text-sm pt-2 border-t border-gray-800">
+                    <div className="text-right font-medium text-white">
+                      {game.away_haslametrics?.last_5_record ?? 'N/A'}
+                    </div>
+                    <div className="text-center text-gray-400">Last 5</div>
+                    <div className="text-left font-medium text-white">
+                      {game.home_haslametrics?.last_5_record ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  {/* Quadrant 1 Record */}
+                  {(game.home_haslametrics?.quad_1_record || game.away_haslametrics?.quad_1_record) && (
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div className="text-right font-medium text-white">
+                        {game.away_haslametrics?.quad_1_record ?? 'N/A'}
+                      </div>
+                      <div className="text-center text-gray-400">Q1 Record</div>
+                      <div className="text-left font-medium text-white">
+                        {game.home_haslametrics?.quad_1_record ?? 'N/A'}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-xs text-gray-500 mt-4 text-center">
+                  Data from Haslametrics.com (FREE)
                 </div>
               </div>
             )}

@@ -483,6 +483,25 @@ def refresh_kenpom_data() -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def refresh_haslametrics_data() -> dict:
+    """Refresh Haslametrics advanced analytics data (FREE - no credentials needed)."""
+    print("\n=== Refreshing Haslametrics Data ===")
+
+    try:
+        from .haslametrics_scraper import refresh_haslametrics_data as hasla_refresh
+
+        # Run the Haslametrics refresh (no credentials needed - FREE!)
+        results = hasla_refresh(season=2025)
+        return results
+
+    except ImportError as e:
+        print(f"Haslametrics scraper import error: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        print(f"Error refreshing Haslametrics data: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
@@ -563,6 +582,14 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         except Exception as e:
             print(f"KenPom refresh error (non-fatal): {e}")
             results["kenpom"] = {"error": str(e)}
+
+        # 2b. Refresh Haslametrics advanced analytics (FREE - no credentials needed)
+        try:
+            hasla_results = refresh_haslametrics_data()
+            results["haslametrics"] = hasla_results
+        except Exception as e:
+            print(f"Haslametrics refresh error (non-fatal): {e}")
+            results["haslametrics"] = {"error": str(e)}
 
         # 3. Run predictions on upcoming games
         prediction_results = run_predictions(force_regenerate=force_regenerate_predictions)

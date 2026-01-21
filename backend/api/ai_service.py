@@ -19,6 +19,7 @@ from .supabase_client import (
     get_latest_spread,
     get_team_ranking,
     get_team_kenpom,
+    get_team_haslametrics,
     insert_ai_analysis,
 )
 
@@ -60,6 +61,14 @@ def build_game_context(game_id: str) -> dict:
     if game.get("away_team_id"):
         away_kenpom = get_team_kenpom(game["away_team_id"], game["season"])
 
+    # Get Haslametrics ratings
+    home_haslametrics = None
+    away_haslametrics = None
+    if game.get("home_team_id"):
+        home_haslametrics = get_team_haslametrics(game["home_team_id"], game["season"])
+    if game.get("away_team_id"):
+        away_haslametrics = get_team_haslametrics(game["away_team_id"], game["season"])
+
     return {
         "game_id": game_id,
         "date": game.get("date"),
@@ -80,6 +89,9 @@ def build_game_context(game_id: str) -> dict:
         # KenPom data
         "home_kenpom": home_kenpom,
         "away_kenpom": away_kenpom,
+        # Haslametrics data
+        "home_haslametrics": home_haslametrics,
+        "away_haslametrics": away_haslametrics,
     }
 
 
@@ -132,6 +144,40 @@ def build_analysis_prompt(context: dict) -> str:
 - Record: {away_kp.get('wins', 0)}-{away_kp.get('losses', 0)}
 """
 
+    # Build Haslametrics section if data is available
+    haslametrics_section = ""
+    home_hasla = context.get("home_haslametrics")
+    away_hasla = context.get("away_haslametrics")
+
+    if home_hasla or away_hasla:
+        haslametrics_section = "\n## HASLAMETRICS ANALYTICS (All-Play Methodology)\n"
+
+        if home_hasla:
+            haslametrics_section += f"""
+**{context['home_team']}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
+- Offensive Efficiency: {home_hasla.get('offensive_efficiency', 'N/A')}
+- Defensive Efficiency: {home_hasla.get('defensive_efficiency', 'N/A')}
+- All-Play %: {home_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
+- Momentum: {home_hasla.get('momentum_overall', 'N/A')} (O: {home_hasla.get('momentum_offense', 'N/A')}, D: {home_hasla.get('momentum_defense', 'N/A')})
+- Pace: {home_hasla.get('pace', 'N/A')}
+- SOS: {home_hasla.get('sos', 'N/A')} (#{home_hasla.get('sos_rank', 'N/A')})
+- Last 5: {home_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {home_hasla.get('quad_1_record', 'N/A')}, Q2: {home_hasla.get('quad_2_record', 'N/A')}
+"""
+
+        if away_hasla:
+            haslametrics_section += f"""
+**{context['away_team']}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
+- Offensive Efficiency: {away_hasla.get('offensive_efficiency', 'N/A')}
+- Defensive Efficiency: {away_hasla.get('defensive_efficiency', 'N/A')}
+- All-Play %: {away_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
+- Momentum: {away_hasla.get('momentum_overall', 'N/A')} (O: {away_hasla.get('momentum_offense', 'N/A')}, D: {away_hasla.get('momentum_defense', 'N/A')})
+- Pace: {away_hasla.get('pace', 'N/A')}
+- SOS: {away_hasla.get('sos', 'N/A')} (#{away_hasla.get('sos_rank', 'N/A')})
+- Last 5: {away_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
+"""
+
     # Build analysis considerations based on available data
     analysis_points = """1. Ranking differential and what it implies about team quality
 2. Home court advantage (if applicable)
@@ -139,13 +185,33 @@ def build_analysis_prompt(context: dict) -> str:
 4. Historical patterns for similar matchups (ranked vs unranked, etc.)
 5. Line value - is the spread accurate?"""
 
-    if home_kp or away_kp:
+    has_kenpom = home_kp or away_kp
+    has_haslametrics = home_hasla or away_hasla
+
+    if has_kenpom and has_haslametrics:
+        # Both analytics sources available - comprehensive analysis
+        analysis_points = """1. Cross-validate KenPom AdjEM vs Haslametrics efficiency (look for agreement/disagreement)
+2. Momentum indicators from Haslametrics - is one team trending up/down?
+3. All-Play % comparison as baseline win probability estimate
+4. Tempo matchup implications (KenPom tempo vs Haslametrics pace)
+5. Quadrant record context for quality of wins
+6. Luck factor (KenPom) - teams with high luck may regress
+7. Recent form (Last 5) vs season-long metrics
+8. Line value - does spread align with both models' expectations?"""
+    elif has_kenpom:
         analysis_points = """1. KenPom efficiency differentials (AdjO vs opponent AdjD matchups)
 2. Tempo implications (fast vs slow matchup, how it affects total)
 3. Strength of schedule context (are records inflated/deflated?)
 4. Luck factor - teams with high luck may regress
 5. Home court advantage (typically worth ~3.5 points)
 6. Line value - does the spread align with KenPom predicted margin?"""
+    elif has_haslametrics:
+        analysis_points = """1. Haslametrics efficiency comparison and All-Play % difference
+2. Momentum indicators - which team is trending in the right direction?
+3. Recent form (Last 5) as indicator of current team quality
+4. Quadrant records context for quality of wins/losses
+5. Home court advantage (if applicable)
+6. Line value - does the spread align with Haslametrics rankings?"""
 
     prompt = f"""You are an expert college basketball betting analyst with deep knowledge of advanced analytics. Analyze this matchup and provide betting recommendations.
 
@@ -159,7 +225,7 @@ Venue: {context['venue'] or 'TBD'}
 Spread: {spread_str or 'Not available'}
 {ml_str}
 Total: O/U {context['total'] or 'N/A'}
-{kenpom_section}
+{kenpom_section}{haslametrics_section}
 ## CONTEXT
 - Conference Game: {'Yes' if context['is_conference_game'] else 'No'}
 - Same Conference: {'Yes' if context['home_conference'] == context['away_conference'] else 'No'}
@@ -186,6 +252,8 @@ Important guidelines:
 - confidence_score should reflect your certainty (0.5 = coin flip, 0.8+ = strong conviction)
 - Be specific about WHY you see value, not just team quality
 - When KenPom data is available, use efficiency margins to estimate expected point differential
+- When Haslametrics data is available, use All-Play % and momentum to validate your pick
+- If KenPom and Haslametrics disagree significantly, lower your confidence score
 
 Respond with ONLY the JSON object, no additional text."""
 
