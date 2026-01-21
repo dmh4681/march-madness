@@ -186,3 +186,12 @@ function GamesListContent({ initialGames = [], days = 7 }: GamesListProps) {
     </>
   );
 }
+
+// Exported component wrapped with error boundary
+export function GamesList(props: GamesListProps) {
+  return (
+    <GamesListErrorBoundary>
+      <GamesListContent {...props} />
+    </GamesListErrorBoundary>
+  );
+}
