@@ -88,8 +88,17 @@ function PickCard({ game, position, total }: PickCardProps) {
         <div className="flex items-center gap-3">
           <ConfidenceBadge tier={game.confidence_tier} />
           <div>
-            <div className="font-medium text-white">
-              {pickedTeam} {isSpreadBet ? formatSpread(spread) : 'ML'}
+            <div className="font-medium text-white flex items-center gap-2">
+              <span>{pickedTeam} {isSpreadBet ? formatSpread(spread) : 'ML'}</span>
+              {/* AI provider indicators */}
+              <span className="flex items-center gap-0.5">
+                {game.has_claude_analysis && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Claude analysis" />
+                )}
+                {game.has_grok_analysis && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500" title="Grok analysis" />
+                )}
+              </span>
             </div>
             <div className="text-sm text-gray-400">
               vs {opponent}

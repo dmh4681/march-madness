@@ -1,5 +1,6 @@
 -- Update today_games view to prioritize AI analysis over baseline predictions
 -- When AI analysis exists, use its recommendation; otherwise fall back to baseline
+-- Claude is primary AI, Grok is secondary. If both exist, use Claude's pick.
 
 DROP VIEW IF EXISTS today_games CASCADE;
 DROP VIEW IF EXISTS upcoming_games CASCADE;
@@ -35,25 +36,34 @@ SELECT
     hr.rank as home_rank,
     ar.rank as away_rank,
 
-    -- Use AI analysis if available, otherwise baseline prediction
-    COALESCE(ai.confidence_score, p.predicted_home_cover_prob) as predicted_home_cover_prob,
+    -- Use AI analysis if available (Claude preferred over Grok), otherwise baseline prediction
+    COALESCE(claude.confidence_score, grok.confidence_score, p.predicted_home_cover_prob) as predicted_home_cover_prob,
     CASE
-        WHEN ai.id IS NOT NULL THEN
+        WHEN claude.id IS NOT NULL THEN
             CASE
-                WHEN ai.confidence_score >= 0.7 THEN 'high'
-                WHEN ai.confidence_score >= 0.5 THEN 'medium'
+                WHEN claude.confidence_score >= 0.7 THEN 'high'
+                WHEN claude.confidence_score >= 0.5 THEN 'medium'
+                ELSE 'low'
+            END
+        WHEN grok.id IS NOT NULL THEN
+            CASE
+                WHEN grok.confidence_score >= 0.7 THEN 'high'
+                WHEN grok.confidence_score >= 0.5 THEN 'medium'
                 ELSE 'low'
             END
         ELSE p.confidence_tier
     END as confidence_tier,
-    COALESCE(ai.recommended_bet, p.recommended_bet) as recommended_bet,
+    COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
     COALESCE(
-        CASE WHEN ai.id IS NOT NULL THEN (ai.confidence_score - 0.5) * 100 END,
+        CASE WHEN claude.id IS NOT NULL THEN (claude.confidence_score - 0.5) * 100 END,
+        CASE WHEN grok.id IS NOT NULL THEN (grok.confidence_score - 0.5) * 100 END,
         p.edge_pct
     ) as edge_pct,
 
-    -- Flag to indicate if AI analysis exists
-    (ai.id IS NOT NULL) as has_ai_analysis
+    -- Flags to indicate which AI analyses exist
+    (claude.id IS NOT NULL OR grok.id IS NOT NULL) as has_ai_analysis,
+    (claude.id IS NOT NULL) as has_claude_analysis,
+    (grok.id IS NOT NULL) as has_grok_analysis
 
 FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
@@ -89,15 +99,22 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT id, recommended_bet, confidence_score
     FROM ai_analysis
-    WHERE game_id = g.id
+    WHERE game_id = g.id AND ai_provider = 'claude'
     ORDER BY created_at DESC
     LIMIT 1
-) ai ON true
+) claude ON true
+LEFT JOIN LATERAL (
+    SELECT id, recommended_bet, confidence_score
+    FROM ai_analysis
+    WHERE game_id = g.id AND ai_provider = 'grok'
+    ORDER BY created_at DESC
+    LIMIT 1
+) grok ON true
 WHERE g.date = CURRENT_DATE
 ORDER BY g.date, ht.name;
 
 
--- Same for upcoming_games view
+-- Same for upcoming_games view (Claude preferred over Grok)
 CREATE OR REPLACE VIEW upcoming_games AS
 SELECT
     g.id,
@@ -125,24 +142,34 @@ SELECT
     hr.rank as home_rank,
     ar.rank as away_rank,
 
-    -- Use AI analysis if available, otherwise baseline prediction
-    COALESCE(ai.confidence_score, p.predicted_home_cover_prob) as predicted_home_cover_prob,
+    -- Use AI analysis if available (Claude preferred over Grok), otherwise baseline prediction
+    COALESCE(claude.confidence_score, grok.confidence_score, p.predicted_home_cover_prob) as predicted_home_cover_prob,
     CASE
-        WHEN ai.id IS NOT NULL THEN
+        WHEN claude.id IS NOT NULL THEN
             CASE
-                WHEN ai.confidence_score >= 0.7 THEN 'high'
-                WHEN ai.confidence_score >= 0.5 THEN 'medium'
+                WHEN claude.confidence_score >= 0.7 THEN 'high'
+                WHEN claude.confidence_score >= 0.5 THEN 'medium'
+                ELSE 'low'
+            END
+        WHEN grok.id IS NOT NULL THEN
+            CASE
+                WHEN grok.confidence_score >= 0.7 THEN 'high'
+                WHEN grok.confidence_score >= 0.5 THEN 'medium'
                 ELSE 'low'
             END
         ELSE p.confidence_tier
     END as confidence_tier,
-    COALESCE(ai.recommended_bet, p.recommended_bet) as recommended_bet,
+    COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
     COALESCE(
-        CASE WHEN ai.id IS NOT NULL THEN (ai.confidence_score - 0.5) * 100 END,
+        CASE WHEN claude.id IS NOT NULL THEN (claude.confidence_score - 0.5) * 100 END,
+        CASE WHEN grok.id IS NOT NULL THEN (grok.confidence_score - 0.5) * 100 END,
         p.edge_pct
     ) as edge_pct,
 
-    (ai.id IS NOT NULL) as has_ai_analysis
+    -- Flags to indicate which AI analyses exist
+    (claude.id IS NOT NULL OR grok.id IS NOT NULL) as has_ai_analysis,
+    (claude.id IS NOT NULL) as has_claude_analysis,
+    (grok.id IS NOT NULL) as has_grok_analysis
 
 FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
@@ -178,10 +205,17 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT id, recommended_bet, confidence_score
     FROM ai_analysis
-    WHERE game_id = g.id
+    WHERE game_id = g.id AND ai_provider = 'claude'
     ORDER BY created_at DESC
     LIMIT 1
-) ai ON true
+) claude ON true
+LEFT JOIN LATERAL (
+    SELECT id, recommended_bet, confidence_score
+    FROM ai_analysis
+    WHERE game_id = g.id AND ai_provider = 'grok'
+    ORDER BY created_at DESC
+    LIMIT 1
+) grok ON true
 WHERE g.date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
 ORDER BY g.date, ht.name;
 

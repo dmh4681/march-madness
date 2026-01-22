@@ -11,15 +11,30 @@ import os
 import re
 import logging
 from datetime import date, datetime
-from typing import Optional, Literal
+from typing import Optional, Literal, Annotated
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 load_dotenv()
+
+# Import our middleware
+from .middleware import (
+    RequestLoggingMiddleware,
+    ApiException,
+    ValidationException,
+    NotFoundException,
+    ExternalApiException,
+    api_exception_handler,
+    validation_exception_handler,
+    general_exception_handler,
+    success_response,
+    error_response,
+)
 
 # Configure logging - avoid leaking sensitive info in logs
 logging.basicConfig(
@@ -110,35 +125,46 @@ app.add_middleware(
 
 
 # =============================================================================
-# SECURITY: Global Exception Handler
+# SECURITY: Middleware & Exception Handlers
 # =============================================================================
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """
-    SECURITY: Global exception handler that prevents internal error details from leaking.
 
-    - Logs full error details server-side for debugging
-    - Returns generic error message to client
-    - Never exposes stack traces, file paths, or internal state
-    """
-    # Generate a request ID for correlation (without exposing internal details)
-    request_id = id(request) % 100000  # Simple numeric ID for client reference
+# Add request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
 
-    # Log the full error server-side for debugging
-    logger.error(
-        f"Request ID {request_id}: Unhandled exception on {request.method} {request.url.path}",
-        exc_info=exc
-    )
+# Register exception handlers
+app.add_exception_handler(ApiException, api_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
 
-    # SECURITY: Return generic error to client - never expose internal details
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "An internal error occurred",
-            "request_id": request_id,
-            "message": "Please contact support if this persists"
-        }
-    )
+
+# ============================================
+# VALIDATION HELPERS
+# ============================================
+
+UUID_PATTERN = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
+
+
+def validate_uuid(value: str, field_name: str = "id") -> str:
+    """Validate UUID format."""
+    if not UUID_PATTERN.match(value):
+        raise ValidationException(
+            message=f"Invalid {field_name} format",
+            details={"field": field_name, "expected": "UUID format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"}
+        )
+    return value
+
+
+def validate_date_string(value: str, field_name: str = "date") -> date:
+    """Validate and parse ISO date string."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValidationException(
+            message=f"Invalid {field_name} format",
+            details={"field": field_name, "expected": "ISO date format (YYYY-MM-DD)"}
+        )
 
 
 # ============================================
@@ -147,31 +173,89 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 class PredictRequest(BaseModel):
-    game_id: Optional[str] = None
+    """Request model for prediction endpoint."""
+    game_id: Optional[str] = Field(
+        default=None,
+        description="UUID of existing game in database"
+    )
     # Or provide matchup details
-    home_team: Optional[str] = None
-    away_team: Optional[str] = None
-    spread: Optional[float] = None
-    is_conference_game: Optional[bool] = False
-    home_rank: Optional[int] = None
-    away_rank: Optional[int] = None
+    home_team: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Home team name"
+    )
+    away_team: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        description="Away team name"
+    )
+    spread: Optional[float] = Field(
+        default=None,
+        ge=-50.0,
+        le=50.0,
+        description="Point spread (home team perspective)"
+    )
+    is_conference_game: Optional[bool] = Field(default=False)
+    home_rank: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Home team AP ranking"
+    )
+    away_rank: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Away team AP ranking"
+    )
+
+    @field_validator('game_id')
+    @classmethod
+    def validate_game_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not UUID_PATTERN.match(v):
+            raise ValueError('game_id must be a valid UUID')
+        return v
+
+    @model_validator(mode='after')
+    def check_required_fields(self):
+        """Ensure either game_id or team names are provided."""
+        if not self.game_id and not (self.home_team and self.away_team):
+            raise ValueError('Must provide either game_id or (home_team + away_team)')
+        return self
 
 
 class PredictResponse(BaseModel):
+    """Response model for prediction endpoint."""
     game_id: Optional[str]
     home_team: str
     away_team: str
-    home_cover_prob: float
-    away_cover_prob: float
+    home_cover_prob: float = Field(ge=0.0, le=1.0)
+    away_cover_prob: float = Field(ge=0.0, le=1.0)
     confidence: str
     recommended_bet: str
-    edge_pct: Optional[float]
+    edge_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     reasoning: Optional[str]
 
 
 class AIAnalysisRequest(BaseModel):
-    game_id: str
-    provider: Literal["claude", "grok"] = "claude"
+    """Request model for AI analysis endpoint."""
+    game_id: str = Field(
+        ...,
+        description="UUID of game to analyze"
+    )
+    provider: Literal["claude", "grok"] = Field(
+        default="claude",
+        description="AI provider to use for analysis"
+    )
+
+    @field_validator('game_id')
+    @classmethod
+    def validate_game_id(cls, v: str) -> str:
+        if not UUID_PATTERN.match(v):
+            raise ValueError('game_id must be a valid UUID')
+        return v
 
 
 class AIAnalysisResponse(BaseModel):
@@ -197,16 +281,122 @@ class StatsResponse(BaseModel):
 
 
 class GameResponse(BaseModel):
+    """Response model for game detail endpoint."""
     id: str
     date: str
     home_team: str
     away_team: str
-    home_rank: Optional[int]
-    away_rank: Optional[int]
-    home_spread: Optional[float]
+    home_rank: Optional[int] = Field(default=None, ge=1, le=100)
+    away_rank: Optional[int] = Field(default=None, ge=1, le=100)
+    home_spread: Optional[float] = Field(default=None, ge=-50.0, le=50.0)
     is_conference_game: bool
     prediction: Optional[dict] = None
     ai_analyses: list[dict] = []
+
+
+# ============================================
+# QUERY PARAMETER MODELS
+# ============================================
+
+class GamesQueryParams(BaseModel):
+    """Query parameters for /games endpoint."""
+    start_date: Optional[str] = Field(
+        default=None,
+        pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description="Start date in ISO format (YYYY-MM-DD)"
+    )
+    end_date: Optional[str] = Field(
+        default=None,
+        pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description="End date in ISO format (YYYY-MM-DD)"
+    )
+    days: int = Field(
+        default=7,
+        ge=1,
+        le=30,
+        description="Number of days to fetch (1-30)"
+    )
+    page: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description="Page number (1-indexed)"
+    )
+    page_size: int = Field(
+        default=20,
+        ge=1,
+        le=50,
+        description="Results per page (max 50)"
+    )
+
+
+class StatsQueryParams(BaseModel):
+    """Query parameters for /stats endpoint."""
+    season: Optional[int] = Field(
+        default=None,
+        ge=2000,
+        le=2100,
+        description="Season year (e.g., 2025)"
+    )
+
+
+class RankingsQueryParams(BaseModel):
+    """Query parameters for /rankings endpoint."""
+    season: Optional[int] = Field(
+        default=None,
+        ge=2000,
+        le=2100,
+        description="Season year"
+    )
+    poll_type: str = Field(
+        default="ap",
+        pattern=r'^[a-z]{2,10}$',
+        description="Poll type (e.g., 'ap')"
+    )
+
+
+class RefreshRequest(BaseModel):
+    """Request model for /refresh endpoint."""
+    api_key: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="Optional authentication key"
+    )
+    force_regenerate: bool = Field(
+        default=False,
+        description="If true, delete and regenerate all predictions"
+    )
+
+
+class BacktestQueryParams(BaseModel):
+    """Query parameters for /backtest endpoint."""
+    start_date: str = Field(
+        ...,
+        pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description="Start date in ISO format"
+    )
+    end_date: str = Field(
+        ...,
+        pattern=r'^\d{4}-\d{2}-\d{2}$',
+        description="End date in ISO format"
+    )
+    model: str = Field(
+        default="baseline",
+        pattern=r'^[a-zA-Z][a-zA-Z0-9_-]{0,29}$',
+        description="Model name for backtesting"
+    )
+
+
+# Type alias for validated game_id path parameter
+GameIdPath = Annotated[
+    str,
+    Path(
+        ...,
+        description="Game UUID",
+        pattern=r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+        examples=["123e4567-e89b-12d3-a456-426614174000"]
+    )
+]
 
 
 # ============================================
@@ -245,12 +435,14 @@ def predict(request: PredictRequest):
     Can provide either:
     - game_id: UUID of an existing game in the database
     - Or: home_team, away_team, spread, etc. for ad-hoc prediction
+
+    Request body validated by PredictRequest model.
     """
     if request.game_id:
         # Fetch game from database
         game = get_game_by_id(request.game_id)
         if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
+            raise NotFoundException(resource="Game", identifier=request.game_id)
 
         spread_data = get_latest_spread(request.game_id)
         prediction = get_latest_prediction(request.game_id)
@@ -374,11 +566,8 @@ def predict(request: PredictRequest):
             reasoning=quick["reasoning"],
         )
 
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide either game_id or (home_team + away_team)"
-        )
+    # Note: This case is now handled by PredictRequest model_validator
+    # If we reach here, validation already passed
 
 
 @app.get("/ai-analysis")
@@ -408,15 +597,19 @@ def ai_analysis(request: AIAnalysisRequest):
         )
 
     except ValueError as e:
-        # SECURITY: ValueError is user-input related, safe to return sanitized message
-        error_msg = str(e)
-        if len(error_msg) > 100:
-            error_msg = error_msg[:100]  # Truncate long error messages
-        raise HTTPException(status_code=400, detail=error_msg)
+        # ValueError is user-input related, return sanitized message
+        error_msg = str(e)[:100]  # Truncate long error messages
+        raise ValidationException(
+            message=error_msg,
+            details={"game_id": request.game_id, "provider": request.provider}
+        )
     except Exception as e:
-        # SECURITY: Log full error server-side, return generic message to client
+        # Log full error server-side, return generic message to client
         logger.error(f"AI analysis failed for game {request.game_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="AI analysis failed. Please try again later.")
+        raise ExternalApiException(
+            service=f"AI/{request.provider}",
+            message="AI analysis failed. Please try again later."
+        )
 
 
 @app.get("/today")
@@ -444,11 +637,34 @@ def get_today():
 
 @app.get("/games")
 def get_games(
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    days: int = 7,
-    page: int = 1,
-    page_size: int = 20
+    start_date: Annotated[
+        Optional[str],
+        Query(
+            description="Start date in ISO format (YYYY-MM-DD)",
+            pattern=r'^\d{4}-\d{2}-\d{2}$',
+            examples=["2025-01-21"]
+        )
+    ] = None,
+    end_date: Annotated[
+        Optional[str],
+        Query(
+            description="End date in ISO format (YYYY-MM-DD)",
+            pattern=r'^\d{4}-\d{2}-\d{2}$',
+            examples=["2025-01-28"]
+        )
+    ] = None,
+    days: Annotated[
+        int,
+        Query(ge=1, le=30, description="Number of days to fetch (1-30)")
+    ] = 7,
+    page: Annotated[
+        int,
+        Query(ge=1, le=1000, description="Page number, 1-indexed")
+    ] = 1,
+    page_size: Annotated[
+        int,
+        Query(ge=1, le=50, description="Results per page (max 50)")
+    ] = 20
 ):
     """
     Get upcoming games with pagination.
@@ -456,15 +672,11 @@ def get_games(
     Query params:
     - start_date: ISO date string (default: today)
     - end_date: ISO date string (default: start + days)
-    - days: Number of days to fetch (default: 7)
+    - days: Number of days to fetch (default: 7, max: 30)
     - page: Page number, 1-indexed (default: 1)
-    - page_size: Number of games per page, max 50 (default: 20)
+    - page_size: Number of games per page (default: 20, max: 50)
     """
     try:
-        # SECURITY: Validate pagination params
-        page = max(1, page)  # Ensure page is at least 1
-        page_size = max(1, min(50, page_size))  # Clamp between 1 and 50
-
         if start_date:
             all_games = get_games_by_date(date.fromisoformat(start_date))
         else:
@@ -493,13 +705,16 @@ def get_games(
 
 
 @app.get("/games/{game_id}", response_model=GameResponse)
-def get_game(game_id: str):
+def get_game(game_id: GameIdPath):
     """
     Get detailed info for a specific game.
+
+    Path params:
+    - game_id: UUID of the game
     """
     game = get_game_by_id(game_id)
     if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
+        raise NotFoundException(resource="Game", identifier=game_id)
 
     spread = get_latest_spread(game_id)
     prediction = get_latest_prediction(game_id)
@@ -531,18 +746,21 @@ class GameAnalyticsResponse(BaseModel):
 
 
 @app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse)
-def get_game_analytics(game_id: str):
+def get_game_analytics(game_id: GameIdPath):
     """
     Get KenPom and Haslametrics analytics for a specific game.
 
     This endpoint is designed for lazy loading - fetch analytics only when
     a user expands a game card or views detailed analytics section.
+
+    Path params:
+    - game_id: UUID of the game
     """
     from .supabase_client import get_team_kenpom, get_team_haslametrics
 
     game = get_game_by_id(game_id)
     if not game:
-        raise HTTPException(status_code=404, detail="Game not found")
+        raise NotFoundException(resource="Game", identifier=game_id)
 
     home_team = game.get("home_team", {})
     away_team = game.get("away_team", {})
@@ -578,9 +796,17 @@ def get_game_analytics(game_id: str):
 
 
 @app.get("/stats", response_model=StatsResponse)
-def get_stats(season: Optional[int] = None):
+def get_stats(
+    season: Annotated[
+        Optional[int],
+        Query(ge=2000, le=2100, description="Season year (e.g., 2025)")
+    ] = None
+):
     """
     Get performance statistics.
+
+    Query params:
+    - season: Year (2000-2100), defaults to current year
     """
     if season is None:
         season = date.today().year
@@ -611,9 +837,22 @@ def get_stats(season: Optional[int] = None):
 
 
 @app.get("/rankings")
-def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
+def get_rankings(
+    season: Annotated[
+        Optional[int],
+        Query(ge=2000, le=2100, description="Season year")
+    ] = None,
+    poll_type: Annotated[
+        str,
+        Query(pattern=r'^[a-z]{2,10}$', description="Poll type (e.g., 'ap')")
+    ] = "ap"
+):
     """
     Get current AP rankings.
+
+    Query params:
+    - season: Year (2000-2100), defaults to current year
+    - poll_type: Type of poll, e.g., 'ap' (default)
     """
     if season is None:
         season = date.today().year
@@ -633,8 +872,14 @@ def get_rankings(season: Optional[int] = None, poll_type: str = "ap"):
 
 @app.post("/refresh")
 def refresh_data(
-    api_key: Optional[str] = None,
-    force_regenerate: bool = False
+    api_key: Annotated[
+        Optional[str],
+        Query(max_length=100, description="Optional authentication key")
+    ] = None,
+    force_regenerate: Annotated[
+        bool,
+        Query(description="If true, delete and regenerate all predictions")
+    ] = False
 ):
     """
     Trigger a data refresh (games, spreads, rankings).
@@ -642,13 +887,17 @@ def refresh_data(
     This endpoint should be called by a cron job or manually.
 
     Query params:
-    - api_key: Optional authentication key
+    - api_key: Optional authentication key (max 100 chars)
     - force_regenerate: If true, delete and regenerate all predictions
     """
     # Simple API key check (only if REFRESH_API_KEY is set in environment)
     expected_key = os.getenv("REFRESH_API_KEY")
     if expected_key and api_key and api_key != expected_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise ApiException(
+            status_code=401,
+            code="UNAUTHORIZED",
+            message="Invalid API key"
+        )
     # If no key is provided and one is expected, still allow (for manual triggers)
 
     try:
@@ -729,13 +978,53 @@ def refresh_haslametrics_endpoint():
 
 @app.get("/backtest")
 def backtest(
-    start_date: str,
-    end_date: str,
-    model: str = "baseline"
+    start_date: Annotated[
+        str,
+        Query(
+            ...,
+            pattern=r'^\d{4}-\d{2}-\d{2}$',
+            description="Start date in ISO format (YYYY-MM-DD)"
+        )
+    ],
+    end_date: Annotated[
+        str,
+        Query(
+            ...,
+            pattern=r'^\d{4}-\d{2}-\d{2}$',
+            description="End date in ISO format (YYYY-MM-DD)"
+        )
+    ],
+    model: Annotated[
+        str,
+        Query(
+            pattern=r'^[a-zA-Z][a-zA-Z0-9_-]{0,29}$',
+            description="Model name (letters, numbers, underscore, hyphen, max 30 chars)"
+        )
+    ] = "baseline"
 ):
     """
     Run backtest on historical data.
+
+    Query params:
+    - start_date: Start date in ISO format (required)
+    - end_date: End date in ISO format (required)
+    - model: Model name for backtesting (default: baseline)
     """
+    # Validate date range
+    try:
+        start = date.fromisoformat(start_date)
+        end = date.fromisoformat(end_date)
+        if end < start:
+            raise ValidationException(
+                message="end_date must be after start_date",
+                details={"start_date": start_date, "end_date": end_date}
+            )
+    except ValueError as e:
+        raise ValidationException(
+            message="Invalid date format",
+            details={"error": str(e)}
+        )
+
     # TODO: Implement backtesting
     return {
         "start_date": start_date,
@@ -746,7 +1035,7 @@ def backtest(
 
 
 @app.get("/debug/ai-analysis/{game_id}")
-def debug_ai_analysis(game_id: str, provider: str = "claude"):
+def debug_ai_analysis(game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
     """
     Debug endpoint to diagnose AI analysis issues.
     Returns detailed error information instead of generic messages.
