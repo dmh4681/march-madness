@@ -4,6 +4,10 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { GamesList } from '@/components/GamesList';
 import type { TodayGame } from '@/lib/types';
 
+// Force dynamic rendering to always fetch fresh data
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // Demo data for games listing - only first page
 const DEMO_GAMES: TodayGame[] = [
   {

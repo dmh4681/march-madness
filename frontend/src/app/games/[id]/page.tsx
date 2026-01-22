@@ -8,6 +8,10 @@ import { ConfidenceBadge } from '@/components/ConfidenceBadge';
 import { AIAnalysisPanel } from '@/components/AIAnalysis';
 import { AIAnalysisButton } from '@/components/AIAnalysisButton';
 
+// Force dynamic rendering to always fetch fresh data
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 async function getGame(id: string): Promise<GameWithDetails | null> {
   if (!isSupabaseConfigured()) {
     return null;

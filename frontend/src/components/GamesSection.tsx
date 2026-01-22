@@ -45,6 +45,17 @@ export function GamesSection({ games }: GamesSectionProps) {
             </button>
           </div>
 
+          {/* AI Legend */}
+          <div className="hidden sm:flex items-center gap-3 text-xs text-gray-400">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-blue-500" />
+              Claude
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-orange-500" />
+              Grok
+            </span>
+          </div>
           {/* Confidence Legend */}
           <div className="hidden sm:flex items-center gap-2">
             <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">

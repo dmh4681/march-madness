@@ -5,6 +5,24 @@
 DROP VIEW IF EXISTS today_games CASCADE;
 DROP VIEW IF EXISTS upcoming_games CASCADE;
 
+-- Helper function to convert American odds to implied probability
+CREATE OR REPLACE FUNCTION american_odds_to_implied_prob(odds INTEGER)
+RETURNS DECIMAL AS $$
+BEGIN
+    IF odds IS NULL THEN
+        RETURN 0.5; -- Default to 50% if no odds
+    ELSIF odds < 0 THEN
+        -- Negative odds: |odds| / (|odds| + 100)
+        RETURN ABS(odds)::DECIMAL / (ABS(odds) + 100);
+    ELSE
+        -- Positive odds: 100 / (odds + 100)
+        RETURN 100.0 / (odds + 100);
+    END IF;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION american_odds_to_implied_prob IS 'Converts American odds to implied probability. -110 → 0.524, +150 → 0.40, -150 → 0.60';
+
 CREATE OR REPLACE VIEW today_games AS
 SELECT
     g.id,
@@ -69,7 +87,7 @@ FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
 JOIN teams at ON g.away_team_id = at.id
 LEFT JOIN LATERAL (
-    SELECT home_spread, home_ml, away_ml, over_under
+    SELECT home_spread, home_ml, away_ml, over_under, home_spread_odds, away_spread_odds
     FROM spreads
     WHERE game_id = g.id
     ORDER BY captured_at DESC
@@ -175,7 +193,7 @@ FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
 JOIN teams at ON g.away_team_id = at.id
 LEFT JOIN LATERAL (
-    SELECT home_spread, home_ml, away_ml, over_under
+    SELECT home_spread, home_ml, away_ml, over_under, home_spread_odds, away_spread_odds
     FROM spreads
     WHERE game_id = g.id
     ORDER BY captured_at DESC

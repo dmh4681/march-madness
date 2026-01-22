@@ -4,6 +4,10 @@ import type { TodayGame, DashboardStats } from '@/lib/types';
 import { PicksList, StatsCard } from '@/components/PicksList';
 import { GamesSection } from '@/components/GamesSection';
 
+// Force dynamic rendering to always fetch fresh data
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 async function getTodayGames(): Promise<TodayGame[]> {
   if (!isSupabaseConfigured()) {
     return [];
