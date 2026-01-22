@@ -1,0 +1,360 @@
+import type { AIAnalysis, AIProvider, GameWithDetails, Team, Spread, Prediction, Ranking, KenPomRating, HaslametricsRating } from '@/lib/types';
+
+// Mock Team data
+export const mockHomeTeam: Team = {
+  id: 'team-home-123',
+  name: 'Duke Blue Devils',
+  normalized_name: 'duke',
+  mascot: 'Blue Devils',
+  conference: 'ACC',
+  is_power_conference: true,
+  logo_url: null,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+};
+
+export const mockAwayTeam: Team = {
+  id: 'team-away-456',
+  name: 'North Carolina Tar Heels',
+  normalized_name: 'north-carolina',
+  mascot: 'Tar Heels',
+  conference: 'ACC',
+  is_power_conference: true,
+  logo_url: null,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+};
+
+// Mock Spread data
+export const mockSpread: Spread = {
+  id: 'spread-123',
+  game_id: 'game-123',
+  captured_at: '2024-01-15T12:00:00Z',
+  home_spread: -5.5,
+  away_spread: 5.5,
+  home_spread_odds: -110,
+  away_spread_odds: -110,
+  home_ml: -200,
+  away_ml: 180,
+  over_under: 145.5,
+  over_odds: -110,
+  under_odds: -110,
+  source: 'fanduel',
+  is_opening_line: false,
+  is_closing_line: false,
+};
+
+// Mock Prediction data
+export const mockPrediction: Prediction = {
+  id: 'pred-123',
+  game_id: 'game-123',
+  created_at: '2024-01-15T10:00:00Z',
+  model_name: 'baseline_v2',
+  model_version: '2.0.0',
+  spread_at_prediction: -5.5,
+  predicted_home_cover_prob: 0.58,
+  predicted_away_cover_prob: 0.42,
+  predicted_home_win_prob: 0.65,
+  predicted_margin: 7.2,
+  confidence_tier: 'medium',
+  recommended_bet: 'home_spread',
+  edge_pct: 3.2,
+  kelly_fraction: 0.08,
+  features_json: null,
+};
+
+// Mock Ranking data
+export const mockHomeRanking: Ranking = {
+  id: 'ranking-home-123',
+  team_id: 'team-home-123',
+  season: 2025,
+  week: 12,
+  poll_date: '2024-01-08',
+  rank: 5,
+  previous_rank: 6,
+  first_place_votes: 10,
+  total_points: 1234,
+  poll_type: 'ap',
+  created_at: '2024-01-08T00:00:00Z',
+};
+
+export const mockAwayRanking: Ranking = {
+  id: 'ranking-away-456',
+  team_id: 'team-away-456',
+  season: 2025,
+  week: 12,
+  poll_date: '2024-01-08',
+  rank: 8,
+  previous_rank: 7,
+  first_place_votes: 5,
+  total_points: 1100,
+  poll_type: 'ap',
+  created_at: '2024-01-08T00:00:00Z',
+};
+
+// Mock KenPom data
+export const mockHomeKenpom: KenPomRating = {
+  id: 'kenpom-home-123',
+  team_id: 'team-home-123',
+  season: 2025,
+  rank: 4,
+  adj_efficiency_margin: 25.8,
+  adj_offense: 118.5,
+  adj_offense_rank: 5,
+  adj_defense: 92.7,
+  adj_defense_rank: 8,
+  adj_tempo: 68.2,
+  adj_tempo_rank: 45,
+  luck: 0.023,
+  luck_rank: 120,
+  sos_adj_em: 10.5,
+  sos_adj_em_rank: 15,
+  sos_opp_offense: 108.2,
+  sos_opp_offense_rank: 20,
+  sos_opp_defense: 97.7,
+  sos_opp_defense_rank: 25,
+  ncsos_adj_em: 8.2,
+  ncsos_adj_em_rank: 30,
+  wins: 18,
+  losses: 3,
+  conference: 'ACC',
+  captured_at: '2024-01-15T06:00:00Z',
+  captured_date: '2024-01-15',
+};
+
+export const mockAwayKenpom: KenPomRating = {
+  id: 'kenpom-away-456',
+  team_id: 'team-away-456',
+  season: 2025,
+  rank: 7,
+  adj_efficiency_margin: 22.3,
+  adj_offense: 115.8,
+  adj_offense_rank: 12,
+  adj_defense: 93.5,
+  adj_defense_rank: 10,
+  adj_tempo: 70.5,
+  adj_tempo_rank: 30,
+  luck: -0.015,
+  luck_rank: 200,
+  sos_adj_em: 9.8,
+  sos_adj_em_rank: 18,
+  sos_opp_offense: 107.5,
+  sos_opp_offense_rank: 22,
+  sos_opp_defense: 97.2,
+  sos_opp_defense_rank: 28,
+  ncsos_adj_em: 7.5,
+  ncsos_adj_em_rank: 35,
+  wins: 17,
+  losses: 4,
+  conference: 'ACC',
+  captured_at: '2024-01-15T06:00:00Z',
+  captured_date: '2024-01-15',
+};
+
+// Mock Haslametrics data
+export const mockHomeHaslametrics: HaslametricsRating = {
+  id: 'haslam-home-123',
+  team_id: 'team-home-123',
+  season: 2025,
+  rank: 5,
+  offensive_efficiency: 115.2,
+  defensive_efficiency: 91.8,
+  efficiency_margin: 23.4,
+  ft_pct: 0.752,
+  momentum_overall: 0.025,
+  momentum_offense: 0.018,
+  momentum_defense: 0.032,
+  consistency: 4.2,
+  sos: 0.58,
+  rpi: 0.62,
+  all_play_pct: 88.5,
+  last_5_record: '4-1',
+  quad_1_record: '5-2',
+  quad_2_record: '3-0',
+  quad_3_record: '4-0',
+  quad_4_record: '6-0',
+  wins: 18,
+  losses: 3,
+  conference: 'ACC',
+  captured_at: '2024-01-15T06:00:00Z',
+  captured_date: '2024-01-15',
+};
+
+export const mockAwayHaslametrics: HaslametricsRating = {
+  id: 'haslam-away-456',
+  team_id: 'team-away-456',
+  season: 2025,
+  rank: 8,
+  offensive_efficiency: 112.5,
+  defensive_efficiency: 93.2,
+  efficiency_margin: 19.3,
+  ft_pct: 0.728,
+  momentum_overall: -0.012,
+  momentum_offense: -0.008,
+  momentum_defense: -0.016,
+  consistency: 5.1,
+  sos: 0.55,
+  rpi: 0.59,
+  all_play_pct: 82.3,
+  last_5_record: '3-2',
+  quad_1_record: '4-3',
+  quad_2_record: '3-1',
+  quad_3_record: '4-0',
+  quad_4_record: '6-0',
+  wins: 17,
+  losses: 4,
+  conference: 'ACC',
+  captured_at: '2024-01-15T06:00:00Z',
+  captured_date: '2024-01-15',
+};
+
+// Mock AI Analysis data
+export const mockClaudeAnalysis: AIAnalysis = {
+  id: 'ai-claude-123',
+  game_id: 'game-123',
+  created_at: '2024-01-15T11:00:00Z',
+  ai_provider: 'claude',
+  model_used: 'claude-3-sonnet',
+  analysis_type: 'game_prediction',
+  prompt_hash: 'abc123',
+  response: 'Full analysis response text...',
+  structured_analysis: null,
+  recommended_bet: 'home_spread',
+  confidence_score: 0.72,
+  key_factors: [
+    'Duke has won 8 of last 10 at home',
+    'UNC struggling on the road (4-5 away record)',
+    'Duke superior defensive efficiency',
+  ],
+  reasoning: 'Duke is the stronger team at home with better defensive metrics. The spread of -5.5 is reasonable given their recent form.',
+  tokens_used: 1250,
+};
+
+export const mockGrokAnalysis: AIAnalysis = {
+  id: 'ai-grok-456',
+  game_id: 'game-123',
+  created_at: '2024-01-15T11:05:00Z',
+  ai_provider: 'grok',
+  model_used: 'grok-1',
+  analysis_type: 'game_prediction',
+  prompt_hash: 'def456',
+  response: 'Grok full analysis response...',
+  structured_analysis: null,
+  recommended_bet: 'home_spread',
+  confidence_score: 0.68,
+  key_factors: [
+    'Duke dominant in ACC play',
+    'Home court advantage significant',
+    'Better adjusted efficiency margin',
+  ],
+  reasoning: 'The Blue Devils have the edge at Cameron Indoor. Their efficiency metrics and home record support taking the spread.',
+  tokens_used: 980,
+};
+
+export const mockPassAnalysis: AIAnalysis = {
+  id: 'ai-pass-789',
+  game_id: 'game-456',
+  created_at: '2024-01-15T11:10:00Z',
+  ai_provider: 'claude',
+  model_used: 'claude-3-sonnet',
+  analysis_type: 'game_prediction',
+  prompt_hash: 'ghi789',
+  response: 'This game is too close to call...',
+  structured_analysis: null,
+  recommended_bet: 'pass',
+  confidence_score: 0.45,
+  key_factors: [
+    'Teams evenly matched',
+    'Spread seems accurate',
+    'No clear edge identified',
+  ],
+  reasoning: 'This matchup is essentially a coin flip. The spread accurately reflects the expected outcome.',
+  tokens_used: 850,
+};
+
+// Mock full game with details
+export const mockGameWithDetails: GameWithDetails = {
+  id: 'game-123',
+  external_id: 'ext-game-123',
+  date: '2024-01-15',
+  tip_time: '2024-01-15T19:00:00Z',
+  season: 2025,
+  home_team_id: 'team-home-123',
+  away_team_id: 'team-away-456',
+  home_score: null,
+  away_score: null,
+  is_conference_game: true,
+  is_tournament: false,
+  tournament_round: null,
+  venue: 'Cameron Indoor Stadium',
+  neutral_site: false,
+  status: 'scheduled',
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-15T00:00:00Z',
+  home_team: mockHomeTeam,
+  away_team: mockAwayTeam,
+  latest_spread: mockSpread,
+  home_ranking: mockHomeRanking,
+  away_ranking: mockAwayRanking,
+  home_kenpom: mockHomeKenpom,
+  away_kenpom: mockAwayKenpom,
+  home_haslametrics: mockHomeHaslametrics,
+  away_haslametrics: mockAwayHaslametrics,
+  prediction: mockPrediction,
+  ai_analyses: [mockClaudeAnalysis, mockGrokAnalysis],
+};
+
+// Helper to create mock AI analysis response
+export function createMockAnalysisResponse(provider: AIProvider = 'claude') {
+  return {
+    provider,
+    analysis: 'Test analysis text',
+    recommended_bet: 'home_spread',
+    confidence_score: 0.72,
+    key_factors: ['Factor 1', 'Factor 2', 'Factor 3'],
+    reasoning: 'Test reasoning text',
+  };
+}
+
+// Helper to create fetch mock responses
+export function createSuccessResponse<T>(data: T): Response {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: new Headers(),
+    redirected: false,
+    type: 'basic',
+    url: '',
+    clone: () => createSuccessResponse(data),
+    text: () => Promise.resolve(JSON.stringify(data)),
+    json: () => Promise.resolve(data),
+    blob: () => Promise.resolve(new Blob()),
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    formData: () => Promise.resolve(new FormData()),
+    body: null,
+    bodyUsed: false,
+    bytes: () => Promise.resolve(new Uint8Array()),
+  };
+}
+
+export function createErrorResponse(status: number, message: string): Response {
+  return {
+    ok: false,
+    status,
+    statusText: message,
+    headers: new Headers(),
+    redirected: false,
+    type: 'basic',
+    url: '',
+    clone: () => createErrorResponse(status, message),
+    text: () => Promise.resolve(JSON.stringify({ detail: message })),
+    json: () => Promise.resolve({ detail: message }),
+    blob: () => Promise.resolve(new Blob()),
+    arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    formData: () => Promise.resolve(new FormData()),
+    body: null,
+    bodyUsed: false,
+    bytes: () => Promise.resolve(new Uint8Array()),
+  };
+}
