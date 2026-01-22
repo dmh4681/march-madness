@@ -259,6 +259,10 @@ export interface TodayGame {
   confidence_tier: ConfidenceTier | null;
   recommended_bet: string | null;
   edge_pct: number | null;
+  // AI analysis indicators
+  has_ai_analysis?: boolean;
+  has_claude_analysis?: boolean;
+  has_grok_analysis?: boolean;
 }
 
 export interface SeasonPerformance {

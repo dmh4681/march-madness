@@ -31,6 +31,7 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
             <th className="py-3 px-2 font-medium text-center">O/U</th>
             {hasAnyMoneylines && <th className="py-3 px-2 font-medium text-center">ML</th>}
             <th className="py-3 px-2 font-medium text-center">Pick</th>
+            <th className="py-3 px-2 font-medium text-center">AI</th>
             <th className="py-3 px-2 font-medium text-center">Conf</th>
             <th className="py-3 px-2 font-medium text-center">Edge</th>
           </tr>
@@ -132,6 +133,27 @@ function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneylin
         {getPickDisplay()}
       </td>
 
+      {/* AI Indicators */}
+      <td className="py-3 px-2 text-center">
+        <div className="flex items-center justify-center gap-1">
+          {game.has_claude_analysis && (
+            <span
+              className="w-2 h-2 rounded-full bg-blue-500"
+              title="Claude analysis available"
+            />
+          )}
+          {game.has_grok_analysis && (
+            <span
+              className="w-2 h-2 rounded-full bg-orange-500"
+              title="Grok analysis available"
+            />
+          )}
+          {!game.has_claude_analysis && !game.has_grok_analysis && (
+            <span className="text-gray-600 text-xs">-</span>
+          )}
+        </div>
+      </td>
+
       {/* Confidence */}
       <td className="py-3 px-2 text-center">
         {game.confidence_tier && game.confidence_tier !== 'pass' ? (
@@ -176,6 +198,7 @@ export function GamesTableCompact({ games }: GamesTableProps) {
             <th className="py-2 px-1 font-medium text-left">Home</th>
             <th className="py-2 px-1 font-medium text-center">Spread</th>
             <th className="py-2 px-1 font-medium text-center">Pick</th>
+            <th className="py-2 px-1 font-medium text-center">AI</th>
             <th className="py-2 px-1 font-medium text-center">Edge</th>
           </tr>
         </thead>
@@ -213,6 +236,19 @@ export function GamesTableCompact({ games }: GamesTableProps) {
                   ) : (
                     <span className="text-gray-600">-</span>
                   )}
+                </td>
+                <td className="py-2 px-1 text-center">
+                  <div className="flex items-center justify-center gap-0.5">
+                    {game.has_claude_analysis && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-500" title="Claude" />
+                    )}
+                    {game.has_grok_analysis && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-500" title="Grok" />
+                    )}
+                    {!game.has_claude_analysis && !game.has_grok_analysis && (
+                      <span className="text-gray-600">-</span>
+                    )}
+                  </div>
                 </td>
                 <td className="py-2 px-1 text-center">
                   {game.edge_pct && game.edge_pct > 0 ? (

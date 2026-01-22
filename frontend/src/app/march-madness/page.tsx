@@ -77,7 +77,7 @@ export default function MarchMadnessPage() {
       <div className="bg-gradient-to-b from-orange-900/20 to-black border-b border-gray-800">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-6 sm:py-12">
           <h1 className="text-2xl sm:text-4xl font-bold text-white mb-1 sm:mb-2">
-            March Madness 2025
+            March Madness 2026
           </h1>
           <p className="text-base sm:text-xl text-gray-400 mb-4 sm:mb-6">
             NCAA Tournament Analysis
