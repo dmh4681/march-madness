@@ -1,9 +1,37 @@
 -- Update today_games view to prioritize AI analysis over baseline predictions
 -- When AI analysis exists, use its recommendation; otherwise fall back to baseline
 -- Claude is primary AI, Grok is secondary. If both exist, use Claude's pick.
+--
+-- EDGE CALCULATION (Scientific):
+-- Edge % = (AI_Confidence - Market_Implied_Probability) × 100
+--
+-- Market Implied Probability from American Odds:
+--   Negative odds (e.g., -150): |odds| / (|odds| + 100) = 60%
+--   Positive odds (e.g., +150): 100 / (odds + 100) = 40%
+--
+-- For spread bets: use spread odds (typically -110 = 52.38%)
+-- For moneyline bets: use actual moneyline odds
 
 DROP VIEW IF EXISTS today_games CASCADE;
 DROP VIEW IF EXISTS upcoming_games CASCADE;
+
+-- Helper function to convert American odds to implied probability
+CREATE OR REPLACE FUNCTION american_odds_to_implied_prob(odds INTEGER)
+RETURNS DECIMAL AS $$
+BEGIN
+    IF odds IS NULL THEN
+        RETURN 0.5; -- Default to 50% if no odds
+    ELSIF odds < 0 THEN
+        -- Negative odds: |odds| / (|odds| + 100)
+        RETURN ABS(odds)::DECIMAL / (ABS(odds) + 100);
+    ELSE
+        -- Positive odds: 100 / (odds + 100)
+        RETURN 100.0 / (odds + 100);
+    END IF;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION american_odds_to_implied_prob IS 'Converts American odds to implied probability. -110 → 0.524, +150 → 0.40, -150 → 0.60';
 
 CREATE OR REPLACE VIEW today_games AS
 SELECT
@@ -54,9 +82,47 @@ SELECT
         ELSE p.confidence_tier
     END as confidence_tier,
     COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
+
+    -- EDGE CALCULATION: (AI_Confidence - Market_Implied_Probability) × 100
+    -- Uses actual odds based on bet type (spread vs moneyline)
     COALESCE(
-        CASE WHEN claude.id IS NOT NULL THEN (claude.confidence_score - 0.5) * 100 END,
-        CASE WHEN grok.id IS NOT NULL THEN (grok.confidence_score - 0.5) * 100 END,
+        CASE WHEN claude.id IS NOT NULL THEN
+            (claude.confidence_score -
+                CASE
+                    -- Spread bets: use spread odds
+                    WHEN claude.recommended_bet IN ('home_spread', 'away_spread') THEN
+                        CASE
+                            WHEN claude.recommended_bet = 'home_spread' THEN american_odds_to_implied_prob(s.home_spread_odds)
+                            ELSE american_odds_to_implied_prob(s.away_spread_odds)
+                        END
+                    -- Moneyline bets: use ML odds
+                    WHEN claude.recommended_bet IN ('home_ml', 'away_ml') THEN
+                        CASE
+                            WHEN claude.recommended_bet = 'home_ml' THEN american_odds_to_implied_prob(s.home_ml)
+                            ELSE american_odds_to_implied_prob(s.away_ml)
+                        END
+                    -- Over/under or pass: default to 52.4% (standard -110)
+                    ELSE 0.524
+                END
+            ) * 100
+        END,
+        CASE WHEN grok.id IS NOT NULL THEN
+            (grok.confidence_score -
+                CASE
+                    WHEN grok.recommended_bet IN ('home_spread', 'away_spread') THEN
+                        CASE
+                            WHEN grok.recommended_bet = 'home_spread' THEN american_odds_to_implied_prob(s.home_spread_odds)
+                            ELSE american_odds_to_implied_prob(s.away_spread_odds)
+                        END
+                    WHEN grok.recommended_bet IN ('home_ml', 'away_ml') THEN
+                        CASE
+                            WHEN grok.recommended_bet = 'home_ml' THEN american_odds_to_implied_prob(s.home_ml)
+                            ELSE american_odds_to_implied_prob(s.away_ml)
+                        END
+                    ELSE 0.524
+                END
+            ) * 100
+        END,
         p.edge_pct
     ) as edge_pct,
 
@@ -69,7 +135,7 @@ FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
 JOIN teams at ON g.away_team_id = at.id
 LEFT JOIN LATERAL (
-    SELECT home_spread, home_ml, away_ml, over_under
+    SELECT home_spread, home_ml, away_ml, over_under, home_spread_odds, away_spread_odds
     FROM spreads
     WHERE game_id = g.id
     ORDER BY captured_at DESC
@@ -160,9 +226,43 @@ SELECT
         ELSE p.confidence_tier
     END as confidence_tier,
     COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
+
+    -- EDGE CALCULATION: (AI_Confidence - Market_Implied_Probability) × 100
     COALESCE(
-        CASE WHEN claude.id IS NOT NULL THEN (claude.confidence_score - 0.5) * 100 END,
-        CASE WHEN grok.id IS NOT NULL THEN (grok.confidence_score - 0.5) * 100 END,
+        CASE WHEN claude.id IS NOT NULL THEN
+            (claude.confidence_score -
+                CASE
+                    WHEN claude.recommended_bet IN ('home_spread', 'away_spread') THEN
+                        CASE
+                            WHEN claude.recommended_bet = 'home_spread' THEN american_odds_to_implied_prob(s.home_spread_odds)
+                            ELSE american_odds_to_implied_prob(s.away_spread_odds)
+                        END
+                    WHEN claude.recommended_bet IN ('home_ml', 'away_ml') THEN
+                        CASE
+                            WHEN claude.recommended_bet = 'home_ml' THEN american_odds_to_implied_prob(s.home_ml)
+                            ELSE american_odds_to_implied_prob(s.away_ml)
+                        END
+                    ELSE 0.524
+                END
+            ) * 100
+        END,
+        CASE WHEN grok.id IS NOT NULL THEN
+            (grok.confidence_score -
+                CASE
+                    WHEN grok.recommended_bet IN ('home_spread', 'away_spread') THEN
+                        CASE
+                            WHEN grok.recommended_bet = 'home_spread' THEN american_odds_to_implied_prob(s.home_spread_odds)
+                            ELSE american_odds_to_implied_prob(s.away_spread_odds)
+                        END
+                    WHEN grok.recommended_bet IN ('home_ml', 'away_ml') THEN
+                        CASE
+                            WHEN grok.recommended_bet = 'home_ml' THEN american_odds_to_implied_prob(s.home_ml)
+                            ELSE american_odds_to_implied_prob(s.away_ml)
+                        END
+                    ELSE 0.524
+                END
+            ) * 100
+        END,
         p.edge_pct
     ) as edge_pct,
 
@@ -175,7 +275,7 @@ FROM games g
 JOIN teams ht ON g.home_team_id = ht.id
 JOIN teams at ON g.away_team_id = at.id
 LEFT JOIN LATERAL (
-    SELECT home_spread, home_ml, away_ml, over_under
+    SELECT home_spread, home_ml, away_ml, over_under, home_spread_odds, away_spread_odds
     FROM spreads
     WHERE game_id = g.id
     ORDER BY captured_at DESC
