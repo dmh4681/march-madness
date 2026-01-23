@@ -26,12 +26,20 @@ function groupGamesByDate(games: TodayGame[]): [string, TodayGame[]][] {
 }
 
 /**
+ * Parse a date string (YYYY-MM-DD) as a local date, not UTC.
+ * This prevents the off-by-one-day issue when displaying dates.
+ */
+function parseLocalDate(dateStr: string): Date {
+  return new Date(dateStr + 'T12:00:00');
+}
+
+/**
  * Format a date string to a readable header (e.g., "Wednesday, January 22")
  */
 function formatDateHeader(dateStr: string): string {
   if (dateStr === 'Unknown') return 'Unknown Date';
   try {
-    return format(parseISO(dateStr), 'EEEE, MMMM d');
+    return format(parseLocalDate(dateStr), 'EEEE, MMMM d');
   } catch {
     return dateStr;
   }

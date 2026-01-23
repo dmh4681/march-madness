@@ -6,12 +6,19 @@ import type { TodayGame } from '@/lib/types';
 import { formatSpread, formatMoneyline } from '@/lib/api';
 
 /**
+ * Parse a date string (YYYY-MM-DD) as a local date, not UTC.
+ */
+function parseLocalDate(dateStr: string): Date {
+  return new Date(dateStr + 'T12:00:00');
+}
+
+/**
  * Format a date string (YYYY-MM-DD) to a short display format (e.g., "Jan 22")
  */
 function formatGameDate(dateStr: string | null): string {
   if (!dateStr) return '-';
   try {
-    return format(parseISO(dateStr), 'MMM d');
+    return format(parseLocalDate(dateStr), 'MMM d');
   } catch {
     return dateStr;
   }

@@ -61,8 +61,15 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
     };
   }, [game.home_spread, game.home_ml, game.away_ml, game.over_under, game.away_team, game.home_team, announce]);
 
-  const tipTime = game.tip_time
-    ? format(new Date(game.tip_time), 'h:mm a')
+  // Check if we have a real tip time or just a date
+  // If tip_time equals date or has no time component, show TBD
+  const hasRealTipTime = game.tip_time &&
+    game.tip_time !== game.date &&
+    game.tip_time.includes('T') &&
+    !game.tip_time.endsWith('T00:00:00');
+
+  const tipTime = hasRealTipTime
+    ? format(new Date(game.tip_time!), 'h:mm a')
     : 'TBD';
 
   const isRankedMatchup = game.home_rank || game.away_rank;

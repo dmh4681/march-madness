@@ -1,11 +1,21 @@
 'use client';
 
 import { useMemo } from 'react';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { GameCard, GameCardSkeleton } from '@/components/GameCard';
 import { useInfiniteGames } from '@/hooks/useInfiniteGames';
 import { GamesListErrorBoundary } from '@/components/ui/ErrorBoundary';
 import type { TodayGame } from '@/lib/types';
+
+/**
+ * Parse a date string (YYYY-MM-DD) as a local date, not UTC.
+ * This prevents the off-by-one-day issue when displaying dates.
+ */
+function parseLocalDate(dateStr: string): Date {
+  // Add noon time to prevent timezone shift issues
+  // "2026-01-22" -> "2026-01-22T12:00:00" (local time)
+  return new Date(dateStr + 'T12:00:00');
+}
 
 interface GamesListProps {
   initialGames?: TodayGame[];
@@ -133,8 +143,8 @@ function GamesListContent({ initialGames = [], days = 7 }: GamesListProps) {
                 <span>Unknown Date</span>
               ) : (
                 <>
-                  <span className="sm:hidden">{format(new Date(dateStr), 'EEE, MMM d')}</span>
-                  <span className="hidden sm:inline">{format(new Date(dateStr), 'EEEE, MMMM d, yyyy')}</span>
+                  <span className="sm:hidden">{format(parseLocalDate(dateStr), 'EEE, MMM d')}</span>
+                  <span className="hidden sm:inline">{format(parseLocalDate(dateStr), 'EEEE, MMMM d, yyyy')}</span>
                 </>
               )}
               <span className="text-sm font-normal text-gray-400 ml-2">
