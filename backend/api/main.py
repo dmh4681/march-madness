@@ -1200,10 +1200,11 @@ def test_kalshi_endpoint():
 
                     for m in batch:
                         ticker = m.get("ticker", "")
-                        # Check if it's NCAAMB
-                        if "NCAAMB" in ticker.upper():
+                        market_str = str(m)  # Convert entire market to string for searching
+                        # Check if it's NCAAMB (anywhere in market data)
+                        if "NCAAMB" in market_str.upper():
                             cbb_tickers_found.append(ticker)
-                        elif "KXNBA" in ticker.upper():
+                        elif "NBA" in market_str.upper() and "NCAA" not in market_str.upper():
                             nba_count += 1
 
                     cursor = data.get("cursor")
