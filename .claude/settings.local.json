@@ -10,7 +10,11 @@
       "Bash(git commit:*)",
       "Bash(python:*)",
       "Bash(pip install:*)",
-      "Bash(railway logs:*)"
+      "Bash(railway logs:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

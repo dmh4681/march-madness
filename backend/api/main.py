@@ -13,6 +13,19 @@ import logging
 from datetime import date, datetime
 from typing import Optional, Literal, Annotated
 
+# Timezone handling - display dates in US Eastern time
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Fallback
+
+EASTERN_TZ = ZoneInfo("America/New_York")
+
+
+def get_eastern_date_today() -> date:
+    """Get today's date in US Eastern time for consistent display."""
+    return datetime.now(EASTERN_TZ).date()
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
@@ -616,11 +629,16 @@ def ai_analysis(request: AIAnalysisRequest):
 def get_today():
     """
     Get today's games with predictions and analysis.
+
+    Uses Eastern time for "today" since college basketball games
+    are scheduled and displayed in US Eastern time.
     """
     try:
+        # Use Eastern time for consistent date display
+        eastern_today = get_eastern_date_today()
         games = get_today_games_view()
         return {
-            "date": date.today().isoformat(),
+            "date": eastern_today.isoformat(),
             "game_count": len(games),
             "games": games,
         }
@@ -628,7 +646,7 @@ def get_today():
         # SECURITY: Log error server-side, return safe response to client
         logger.error(f"Error fetching today's games: {e}", exc_info=True)
         return {
-            "date": date.today().isoformat(),
+            "date": get_eastern_date_today().isoformat(),
             "game_count": 0,
             "games": [],
             "error": "Unable to fetch games. Please try again later.",
