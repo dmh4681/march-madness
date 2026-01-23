@@ -587,6 +587,25 @@ def refresh_haslametrics_data() -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def refresh_espn_tip_times(days: int = 7) -> dict:
+    """Refresh game tip times from ESPN (FREE - public API)."""
+    print("\n=== Refreshing ESPN Tip Times ===")
+
+    try:
+        from .espn_scraper import refresh_espn_tip_times as espn_refresh
+
+        # Run the ESPN refresh (no credentials needed - FREE!)
+        results = espn_refresh(days=days)
+        return results
+
+    except ImportError as e:
+        print(f"ESPN scraper import error: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        print(f"Error refreshing ESPN tip times: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
@@ -677,6 +696,14 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         except Exception as e:
             print(f"Haslametrics refresh error (non-fatal): {e}")
             results["haslametrics"] = {"error": str(e)}
+
+        # 2c. Update game tip times from ESPN (FREE - public API)
+        try:
+            espn_results = refresh_espn_tip_times(days=7)
+            results["espn_tip_times"] = espn_results
+        except Exception as e:
+            print(f"ESPN tip times refresh error (non-fatal): {e}")
+            results["espn_tip_times"] = {"error": str(e)}
 
         # 3. Run predictions on upcoming games
         prediction_results = run_predictions(force_regenerate=force_regenerate_predictions)

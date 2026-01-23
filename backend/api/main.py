@@ -997,6 +997,44 @@ def refresh_haslametrics_endpoint():
         raise HTTPException(status_code=500, detail="Haslametrics refresh failed. Please try again later.")
 
 
+@app.post("/refresh-espn-times")
+def refresh_espn_times_endpoint(
+    days: Annotated[
+        int,
+        Query(ge=1, le=14, description="Number of days ahead to fetch (max 14)")
+    ] = 7
+):
+    """
+    Update game tip times from ESPN's public API.
+
+    This fetches real scheduled game times and updates our games table.
+    Fast operation - no authentication required, can be run frequently.
+
+    Query params:
+    - days: Number of days ahead to fetch (default: 7, max: 14)
+    """
+    try:
+        from ..data_collection.espn_scraper import refresh_espn_tip_times
+
+        results = refresh_espn_tip_times(days=days)
+
+        return {
+            "status": "success",
+            "results": results,
+        }
+    except ImportError as e:
+        # SECURITY: Log detailed error server-side
+        logger.error(f"ESPN scraper import error: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": "Service configuration error",
+        }
+    except Exception as e:
+        # SECURITY: Log error server-side, return generic message to client
+        logger.error(f"ESPN tip times refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="ESPN tip times refresh failed. Please try again later.")
+
+
 @app.get("/backtest")
 def backtest(
     start_date: Annotated[
