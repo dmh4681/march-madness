@@ -2,11 +2,18 @@
 AI Service for game analysis using Claude and Grok.
 
 Provides betting analysis and recommendations using LLMs.
+
+SECURITY NOTES:
+- API keys are loaded from environment variables, never hardcoded
+- Error messages are sanitized to prevent key leakage
+- API key values are never logged
 """
 
 import os
+import re
 import json
 import hashlib
+import logging
 from datetime import datetime
 from typing import Optional, Literal
 
@@ -27,7 +34,9 @@ from .supabase_client import (
 
 load_dotenv()
 
-# API Keys
+logger = logging.getLogger(__name__)
+
+# API Keys - loaded from environment, never hardcoded
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 GROK_BASE_URL = "https://api.x.ai/v1"  # Grok uses OpenAI-compatible API
@@ -37,6 +46,67 @@ claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_
 grok_client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_BASE_URL) if GROK_API_KEY else None
 
 AIProvider = Literal["claude", "grok"]
+
+
+# =============================================================================
+# SECURITY: Error Message Sanitization
+# =============================================================================
+
+# Patterns that might contain sensitive information
+_SENSITIVE_PATTERNS = [
+    # API key patterns
+    r'sk-ant-api[a-zA-Z0-9_-]+',  # Anthropic
+    r'xai-[a-zA-Z0-9_-]+',  # Grok/xAI
+    r'sk-[a-zA-Z0-9_-]{40,}',  # OpenAI-style
+    r'eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+',  # JWT tokens
+    # Email/password patterns
+    r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',  # Emails
+    r'password[=:]\s*[^\s,]+',  # Password values
+    # Connection strings
+    r'postgresql://[^\s]+',
+    r'https://[a-zA-Z0-9-]+\.supabase\.co/[^\s]+',
+]
+
+_COMPILED_PATTERNS = [re.compile(p, re.IGNORECASE) for p in _SENSITIVE_PATTERNS]
+
+
+def _sanitize_error_message(error_msg: str) -> str:
+    """
+    Sanitize an error message to remove any potentially sensitive information.
+
+    SECURITY: This function ensures that API keys, tokens, passwords, and other
+    sensitive data are not exposed in error messages returned to clients or logged.
+
+    Args:
+        error_msg: The original error message
+
+    Returns:
+        Sanitized error message with sensitive patterns replaced
+    """
+    if not error_msg:
+        return "An error occurred"
+
+    sanitized = error_msg
+
+    # Replace known sensitive patterns
+    for pattern in _COMPILED_PATTERNS:
+        sanitized = pattern.sub("[REDACTED]", sanitized)
+
+    # Also check for common API key environment variable names in error messages
+    # and redact values that follow them
+    env_var_pattern = re.compile(
+        r'(ANTHROPIC_API_KEY|GROK_API_KEY|SUPABASE_SERVICE_KEY|ODDS_API_KEY|'
+        r'KENPOM_PASSWORD|REFRESH_API_KEY|KALSHI_API_KEY)[=:\s]+[^\s,]+',
+        re.IGNORECASE
+    )
+    sanitized = env_var_pattern.sub(r'\1=[REDACTED]', sanitized)
+
+    # Truncate very long error messages that might contain dumps
+    max_length = 500
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "... [truncated]"
+
+    return sanitized
 
 
 def build_game_context(game_id: str) -> dict:
@@ -510,13 +580,15 @@ class AIAnalyzer:
             try:
                 results["claude"] = analyze_game(game_id, "claude", save)
             except Exception as e:
-                results["claude_error"] = str(e)
+                # SECURITY: Sanitize error message to avoid leaking API key info
+                results["claude_error"] = _sanitize_error_message(str(e))
 
         if grok_client:
             try:
                 results["grok"] = analyze_game(game_id, "grok", save)
             except Exception as e:
-                results["grok_error"] = str(e)
+                # SECURITY: Sanitize error message to avoid leaking API key info
+                results["grok_error"] = _sanitize_error_message(str(e))
 
         # Combine recommendations
         if "claude" in results and "grok" in results:

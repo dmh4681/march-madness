@@ -47,6 +47,21 @@ from .middleware import (
     general_exception_handler,
     success_response,
     error_response,
+    # Rate limiting
+    limiter,
+    rate_limit_exceeded_handler,
+    RATE_LIMIT_AI_ENDPOINTS,
+    RATE_LIMIT_STANDARD_ENDPOINTS,
+)
+from slowapi.errors import RateLimitExceeded
+
+# Import secrets validator
+from .secrets_validator import (
+    validate_all_secrets,
+    log_secrets_status,
+    get_secrets_status,
+    check_ai_provider_available,
+    SecretsValidationError,
 )
 
 # Configure logging - avoid leaking sensitive info in logs
@@ -55,6 +70,24 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# SECURITY: Startup Secrets Validation
+# =============================================================================
+# Validate all secrets at startup and log status (never actual values)
+try:
+    _secrets_validation = validate_all_secrets(raise_on_missing_required=False)
+    log_secrets_status()
+
+    if not _secrets_validation.is_valid:
+        logger.error(
+            "SECURITY WARNING: Required secrets are missing. "
+            f"Missing: {_secrets_validation.missing_required}. "
+            "The application may not function correctly."
+        )
+except SecretsValidationError as e:
+    logger.error(f"CRITICAL: Secrets validation failed: {e}")
+    # Don't exit - let the app start so health checks can report the issue
 
 # Import our modules
 from .supabase_client import (
@@ -126,6 +159,12 @@ app = FastAPI(
     # redoc_url=None if os.getenv("ENVIRONMENT") == "production" else "/redoc",
 )
 
+# =============================================================================
+# SECURITY: Rate Limiting Setup
+# =============================================================================
+# Add the rate limiter to app state (required by slowapi)
+app.state.limiter = limiter
+
 # SECURITY: Strict CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
@@ -148,6 +187,7 @@ app.add_middleware(RequestLoggingMiddleware)
 # Register exception handlers
 app.add_exception_handler(ApiException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
 
@@ -431,18 +471,34 @@ def root():
 
 @app.get("/health")
 def health():
-    """Detailed health check."""
+    """
+    Detailed health check.
+
+    SECURITY: Returns only boolean configuration status, never actual key values.
+    Uses secrets_validator to check configuration validity without exposing secrets.
+    """
+    # Check AI provider availability using validated checks
+    claude_available, grok_available = check_ai_provider_available()
+
+    # Get full secrets status (safe - only returns booleans)
+    secrets_status = get_secrets_status()
+
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "supabase_configured": bool(os.getenv("SUPABASE_URL")),
-        "claude_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "grok_configured": bool(os.getenv("GROK_API_KEY")),
+        # Validated configuration status (not just os.getenv checks)
+        "supabase_configured": secrets_status.get("SUPABASE_URL", {}).get("valid", False),
+        "claude_configured": claude_available,
+        "grok_configured": grok_available,
+        # Additional detail about secrets configuration
+        "secrets_valid": _secrets_validation.is_valid if '_secrets_validation' in dir() else False,
+        "missing_recommended": _secrets_validation.missing_recommended if '_secrets_validation' in dir() else [],
     }
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(request: PredictRequest):
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def predict(request: Request, predict_request: PredictRequest):
     """
     Get prediction for a game.
 
@@ -451,22 +507,24 @@ def predict(request: PredictRequest):
     - Or: home_team, away_team, spread, etc. for ad-hoc prediction
 
     Request body validated by PredictRequest model.
-    """
-    if request.game_id:
-        # Fetch game from database
-        game = get_game_by_id(request.game_id)
-        if not game:
-            raise NotFoundException(resource="Game", identifier=request.game_id)
 
-        spread_data = get_latest_spread(request.game_id)
-        prediction = get_latest_prediction(request.game_id)
+    Rate limited: 5 requests per minute per IP (AI endpoint).
+    """
+    if predict_request.game_id:
+        # Fetch game from database
+        game = get_game_by_id(predict_request.game_id)
+        if not game:
+            raise NotFoundException(resource="Game", identifier=predict_request.game_id)
+
+        spread_data = get_latest_spread(predict_request.game_id)
+        prediction = get_latest_prediction(predict_request.game_id)
 
         home_team = game.get("home_team", {}).get("name", "Unknown")
         away_team = game.get("away_team", {}).get("name", "Unknown")
 
         if prediction:
             return PredictResponse(
-                game_id=request.game_id,
+                game_id=predict_request.game_id,
                 home_team=home_team,
                 away_team=away_team,
                 home_cover_prob=prediction.get("predicted_home_cover_prob", 0.5),
@@ -478,7 +536,7 @@ def predict(request: PredictRequest):
             )
 
         # No prediction exists - calculate using spread-based heuristics
-        context = build_game_context(request.game_id)
+        context = build_game_context(predict_request.game_id)
         quick = get_quick_recommendation(context)
 
         # Calculate probability based on spread
@@ -513,7 +571,7 @@ def predict(request: PredictRequest):
                 edge_pct = edge
 
         return PredictResponse(
-            game_id=request.game_id,
+            game_id=predict_request.game_id,
             home_team=home_team,
             away_team=away_team,
             home_cover_prob=home_cover_prob,
@@ -524,15 +582,15 @@ def predict(request: PredictRequest):
             reasoning=quick["reasoning"],
         )
 
-    elif request.home_team and request.away_team:
+    elif predict_request.home_team and predict_request.away_team:
         # Ad-hoc prediction
         context = {
-            "home_team": request.home_team,
-            "away_team": request.away_team,
-            "home_rank": request.home_rank,
-            "away_rank": request.away_rank,
-            "spread": request.spread,
-            "is_conference_game": request.is_conference_game,
+            "home_team": predict_request.home_team,
+            "away_team": predict_request.away_team,
+            "home_rank": predict_request.home_rank,
+            "away_rank": predict_request.away_rank,
+            "spread": predict_request.spread,
+            "is_conference_game": predict_request.is_conference_game,
         }
 
         quick = get_quick_recommendation(context)
@@ -542,13 +600,13 @@ def predict(request: PredictRequest):
         confidence = "low"
         edge_pct = None
 
-        if request.spread is not None:
-            spread = request.spread
+        if predict_request.spread is not None:
+            spread = predict_request.spread
             # Base adjustment for home court advantage
             home_cover_prob = 0.52
 
             # Conference games have stronger home edge
-            if request.is_conference_game:
+            if predict_request.is_conference_game:
                 home_cover_prob = 0.53
 
             # Adjust based on spread magnitude
@@ -570,8 +628,8 @@ def predict(request: PredictRequest):
 
         return PredictResponse(
             game_id=None,
-            home_team=request.home_team,
-            away_team=request.away_team,
+            home_team=predict_request.home_team,
+            away_team=predict_request.away_team,
             home_cover_prob=home_cover_prob,
             away_cover_prob=1 - home_cover_prob,
             confidence=confidence,
@@ -591,17 +649,20 @@ def ai_analysis_get():
 
 
 @app.post("/ai-analysis", response_model=AIAnalysisResponse)
-def ai_analysis(request: AIAnalysisRequest):
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
     """
     Generate AI analysis for a game.
 
     Uses Claude or Grok to analyze the matchup and provide betting recommendations.
+
+    Rate limited: 5 requests per minute per IP (AI endpoint).
     """
     try:
-        result = analyze_game(request.game_id, request.provider)
+        result = analyze_game(analysis_request.game_id, analysis_request.provider)
 
         return AIAnalysisResponse(
-            game_id=request.game_id,
+            game_id=analysis_request.game_id,
             provider=result["ai_provider"],
             recommended_bet=result["recommended_bet"],
             confidence_score=result["confidence_score"],
@@ -615,24 +676,27 @@ def ai_analysis(request: AIAnalysisRequest):
         error_msg = str(e)[:100]  # Truncate long error messages
         raise ValidationException(
             message=error_msg,
-            details={"game_id": request.game_id, "provider": request.provider}
+            details={"game_id": analysis_request.game_id, "provider": analysis_request.provider}
         )
     except Exception as e:
         # Log full error server-side, return generic message to client
-        logger.error(f"AI analysis failed for game {request.game_id}: {e}", exc_info=True)
+        logger.error(f"AI analysis failed for game {analysis_request.game_id}: {e}", exc_info=True)
         raise ExternalApiException(
-            service=f"AI/{request.provider}",
+            service=f"AI/{analysis_request.provider}",
             message="AI analysis failed. Please try again later."
         )
 
 
 @app.get("/today")
-def get_today():
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_today(request: Request):
     """
     Get today's games with predictions and analysis.
 
     Uses Eastern time for "today" since college basketball games
     are scheduled and displayed in US Eastern time.
+
+    Rate limited: 30 requests per minute per IP.
     """
     try:
         # Use Eastern time for consistent date display
@@ -655,7 +719,9 @@ def get_today():
 
 
 @app.get("/games")
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_games(
+    request: Request,
     start_date: Annotated[
         Optional[str],
         Query(
@@ -697,6 +763,8 @@ def get_games(
     - days: Number of days to fetch (default: 7, max: 30)
     - page: Page number, 1-indexed (default: 1)
     - page_size: Number of games per page (default: 20, max: 50)
+
+    Rate limited: 30 requests per minute per IP.
     """
     try:
         # Use the view which returns flat data (home_team as string, not object)
@@ -726,12 +794,15 @@ def get_games(
 
 
 @app.get("/games/{game_id}", response_model=GameResponse)
-def get_game(game_id: GameIdPath):
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_game(request: Request, game_id: GameIdPath):
     """
     Get detailed info for a specific game.
 
     Path params:
     - game_id: UUID of the game
+
+    Rate limited: 30 requests per minute per IP.
     """
     game = get_game_by_id(game_id)
     if not game:
@@ -767,7 +838,8 @@ class GameAnalyticsResponse(BaseModel):
 
 
 @app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse)
-def get_game_analytics(game_id: GameIdPath):
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_game_analytics(request: Request, game_id: GameIdPath):
     """
     Get KenPom and Haslametrics analytics for a specific game.
 
@@ -776,6 +848,8 @@ def get_game_analytics(game_id: GameIdPath):
 
     Path params:
     - game_id: UUID of the game
+
+    Rate limited: 30 requests per minute per IP.
     """
     from .supabase_client import get_team_kenpom, get_team_haslametrics
 
@@ -817,7 +891,9 @@ def get_game_analytics(game_id: GameIdPath):
 
 
 @app.get("/stats", response_model=StatsResponse)
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_stats(
+    request: Request,
     season: Annotated[
         Optional[int],
         Query(ge=2000, le=2100, description="Season year (e.g., 2025)")
@@ -828,6 +904,8 @@ def get_stats(
 
     Query params:
     - season: Year (2000-2100), defaults to current year
+
+    Rate limited: 30 requests per minute per IP.
     """
     if season is None:
         season = date.today().year
@@ -858,7 +936,9 @@ def get_stats(
 
 
 @app.get("/rankings")
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_rankings(
+    request: Request,
     season: Annotated[
         Optional[int],
         Query(ge=2000, le=2100, description="Season year")
@@ -874,6 +954,8 @@ def get_rankings(
     Query params:
     - season: Year (2000-2100), defaults to current year
     - poll_type: Type of poll, e.g., 'ap' (default)
+
+    Rate limited: 30 requests per minute per IP.
     """
     if season is None:
         season = date.today().year
@@ -1094,12 +1176,15 @@ def backtest(
 
 
 @app.get("/debug/ai-analysis/{game_id}")
-def debug_ai_analysis(game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def debug_ai_analysis(request: Request, game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
     """
     Debug endpoint to diagnose AI analysis issues.
     Returns detailed error information instead of generic messages.
 
     WARNING: This endpoint exposes internal errors - remove in production!
+
+    Rate limited: 5 requests per minute per IP (AI endpoint).
     """
     results = {
         "game_id": game_id,
@@ -1140,17 +1225,17 @@ def debug_ai_analysis(game_id: GameIdPath, provider: Literal["claude", "grok"] =
         results["errors"].append(f"Context build error: {str(e)}")
         return results
 
-    # Step 3: Check API keys
-    import os
+    # Step 3: Check API keys (using secrets validator - never expose actual keys)
+    claude_available, grok_available = check_ai_provider_available()
     results["steps"]["3_api_keys"] = {
-        "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
-        "grok_configured": bool(os.getenv("GROK_API_KEY")),
+        "anthropic_configured": claude_available,
+        "grok_configured": grok_available,
     }
 
-    if provider == "claude" and not os.getenv("ANTHROPIC_API_KEY"):
-        results["errors"].append("ANTHROPIC_API_KEY not configured")
-    if provider == "grok" and not os.getenv("GROK_API_KEY"):
-        results["errors"].append("GROK_API_KEY not configured")
+    if provider == "claude" and not claude_available:
+        results["errors"].append("Claude API key not configured or invalid")
+    if provider == "grok" and not grok_available:
+        results["errors"].append("Grok API key not configured or invalid")
 
     # Step 4: Try the actual AI call
     try:

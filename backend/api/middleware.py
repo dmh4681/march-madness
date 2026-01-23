@@ -6,6 +6,7 @@ Provides:
 - Structured error handling
 - Response standardization
 - Request timing
+- Rate limiting for API endpoints
 """
 
 import json
@@ -14,11 +15,16 @@ import time
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# Rate limiting imports
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Context variable for request ID
 request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
@@ -296,4 +302,82 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
             request_id
         ),
         headers={"X-Request-ID": request_id} if request_id else {}
+    )
+
+
+# =============================================================================
+# Rate Limiting Configuration
+# =============================================================================
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract client IP address from request.
+
+    Handles common proxy headers (X-Forwarded-For, X-Real-IP) for deployments
+    behind load balancers (Railway, Vercel, etc.).
+    """
+    # Check X-Forwarded-For header (common with proxies/load balancers)
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
+        # The first IP is the original client
+        return forwarded_for.split(",")[0].strip()
+
+    # Check X-Real-IP header (nginx)
+    real_ip = request.headers.get("X-Real-IP")
+    if real_ip:
+        return real_ip.strip()
+
+    # Fall back to direct connection IP
+    if request.client:
+        return request.client.host
+
+    return "unknown"
+
+
+# Create the limiter instance with IP-based key function
+limiter = Limiter(key_func=get_client_ip)
+
+# Rate limit constants
+RATE_LIMIT_AI_ENDPOINTS = "5/minute"      # Expensive AI analysis endpoints
+RATE_LIMIT_STANDARD_ENDPOINTS = "30/minute"  # Standard API endpoints
+
+
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """
+    Handle rate limit exceeded errors with proper HTTP 429 response.
+
+    Returns a JSON response with:
+    - 429 status code
+    - Retry-After header indicating when the client can retry
+    - Structured error response with details
+    """
+    request_id = getattr(request.state, 'request_id', None) or get_current_request_id()
+
+    # Extract retry-after from the exception detail if available
+    # slowapi format: "Rate limit exceeded: X per Y"
+    retry_after = 60  # Default to 60 seconds
+
+    # Log the rate limit event
+    logger.warning(
+        f"[{request_id}] Rate limit exceeded for IP: {get_client_ip(request)} "
+        f"on path: {request.url.path}"
+    )
+
+    return JSONResponse(
+        status_code=429,
+        content=error_response(
+            code="RATE_LIMIT_EXCEEDED",
+            message="Too many requests. Please slow down and try again later.",
+            details={
+                "retry_after_seconds": retry_after,
+                "limit": str(exc.detail) if hasattr(exc, 'detail') else "Rate limit exceeded"
+            },
+            request_id=request_id
+        ),
+        headers={
+            "X-Request-ID": request_id or "",
+            "Retry-After": str(retry_after),
+            "X-RateLimit-Limit": str(exc.detail) if hasattr(exc, 'detail') else "unknown"
+        }
     )
