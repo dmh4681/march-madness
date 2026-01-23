@@ -96,7 +96,11 @@ class KalshiClient:
                     logger.info("Kalshi private key loaded successfully")
 
             except FileNotFoundError:
-                logger.error(f"Kalshi private key file not found: {self.private_key_path}")
+                logger.error(
+                    f"Kalshi private key file not found: {self.private_key_path}. "
+                    "For Railway/cloud deployments, use KALSHI_PRIVATE_KEY env var "
+                    "with the actual PEM key content (use \\n for newlines)."
+                )
             except Exception as e:
                 logger.error(f"Error loading Kalshi private key: {e}")
 
