@@ -29,6 +29,7 @@ CBB_SERIES_PREFIXES = [
     "MM",         # March Madness abbreviated
     "FINALFOUR",  # Final Four
     "NCAAT",      # NCAA Tournament
+    "KXNCAAMB",   # Kalshi NCAA Men's Basketball format (KXNCAAMBGAME-...)
 ]
 
 
