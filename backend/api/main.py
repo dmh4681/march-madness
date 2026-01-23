@@ -1178,8 +1178,8 @@ def test_kalshi_endpoint():
             cursor = None
 
             async with httpx.AsyncClient(base_url=KALSHI_BASE_URL, timeout=30.0) as http:
-                # Fetch up to 5 pages (500 markets)
-                while pages_fetched < 5:
+                # Fetch up to 20 pages (2000 markets) to find standalone CBB
+                while pages_fetched < 20:
                     path = "/markets"
                     params = {"limit": 100, "status": "open"}
                     if cursor:
@@ -1198,14 +1198,16 @@ def test_kalshi_endpoint():
                     total_markets += len(batch)
                     pages_fetched += 1
 
+                    standalone_prefixes = ["KXNCAAMB", "KXNCAAB", "NCAAM", "NCAAB", "CBB"]
                     for m in batch:
                         ticker = m.get("ticker", "")
                         title = m.get("title", "") or ""
                         market_str = str(m)  # Convert entire market to string for searching
 
                         # Check if it's a standalone NCAAMB market (not a parlay)
-                        if ticker.upper().startswith("KXNCAAMB"):
-                            cbb_tickers_found.append({"ticker": ticker, "title": title, "type": "standalone"})
+                        is_standalone = any(ticker.upper().startswith(p) for p in standalone_prefixes)
+                        if is_standalone:
+                            cbb_tickers_found.append({"ticker": ticker, "title": title[:80], "type": "standalone"})
                         # Check for NCAAMB in multi-game parlays
                         elif "NCAAMB" in market_str.upper() and "MULTIGAME" in ticker.upper():
                             cbb_tickers_found.append({"ticker": ticker[:50], "title": title[:50], "type": "parlay"})
