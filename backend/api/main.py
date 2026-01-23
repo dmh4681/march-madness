@@ -1153,6 +1153,54 @@ def get_prediction_markets():
         return {"error": str(e)}
 
 
+@app.get("/debug-pm-match")
+def debug_pm_match():
+    """
+    Debug: Check if prediction markets match upcoming games.
+    """
+    try:
+        from .supabase_client import get_supabase
+        supabase = get_supabase()
+
+        # Get prediction market team IDs
+        pm_result = supabase.table("prediction_markets").select("team_id").eq("status", "open").execute()
+        pm_team_ids = set(m["team_id"] for m in (pm_result.data or []) if m.get("team_id"))
+
+        # Get upcoming games
+        from datetime import date, timedelta
+        today = date.today()
+        end_date = today + timedelta(days=7)
+        games_result = supabase.table("games").select(
+            "id, date, home_team_id, away_team_id"
+        ).gte("date", today.isoformat()).lte("date", end_date.isoformat()).execute()
+        games = games_result.data or []
+
+        # Check for matches
+        matches = []
+        for g in games:
+            home_match = g["home_team_id"] in pm_team_ids
+            away_match = g["away_team_id"] in pm_team_ids
+            if home_match or away_match:
+                matches.append({
+                    "game_id": g["id"],
+                    "date": g["date"],
+                    "home_team_id": g["home_team_id"],
+                    "away_team_id": g["away_team_id"],
+                    "home_has_pm": home_match,
+                    "away_has_pm": away_match,
+                })
+
+        return {
+            "pm_team_ids_count": len(pm_team_ids),
+            "games_checked": len(games),
+            "games_with_pm_match": len(matches),
+            "matches": matches[:10],  # First 10
+        }
+    except Exception as e:
+        logger.error(f"Debug PM match failed: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/test-kalshi")
 def test_kalshi_endpoint():
     """
