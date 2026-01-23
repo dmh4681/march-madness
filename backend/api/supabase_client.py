@@ -13,9 +13,23 @@ SECURITY NOTES:
 import os
 import re
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 from functools import wraps
+
+# Timezone handling - use Eastern time for date queries
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Fallback
+
+EASTERN_TZ = ZoneInfo("America/New_York")
+
+
+def get_eastern_date_today() -> date:
+    """Get today's date in US Eastern time for consistent queries."""
+    return datetime.now(EASTERN_TZ).date()
+
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -246,10 +260,14 @@ def upsert_game(game_data: dict) -> dict:
 
 
 def get_upcoming_games(days: int = 7) -> list[dict]:
-    """Get games for the next N days."""
+    """Get games for the next N days.
+
+    Uses Eastern time for date queries since games are stored in Eastern time.
+    """
     client = get_supabase()
-    today = date.today()
-    end_date = date.today().replace(day=today.day + days)
+    # Use Eastern time for consistency with game dates stored in DB
+    today = get_eastern_date_today()
+    end_date = today + timedelta(days=days)
 
     result = client.table("games").select(
         "*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*)"
