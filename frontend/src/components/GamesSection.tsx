@@ -1,9 +1,41 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { format, parseISO } from 'date-fns';
 import type { TodayGame } from '@/lib/types';
 import { GameCard } from './GameCard';
 import { GamesTable } from './GamesTable';
+
+/**
+ * Group games by date and return an array of [dateString, games[]] pairs
+ * sorted by date ascending
+ */
+function groupGamesByDate(games: TodayGame[]): [string, TodayGame[]][] {
+  const grouped = new Map<string, TodayGame[]>();
+
+  for (const game of games) {
+    const dateKey = game.date || 'Unknown';
+    if (!grouped.has(dateKey)) {
+      grouped.set(dateKey, []);
+    }
+    grouped.get(dateKey)!.push(game);
+  }
+
+  // Sort by date
+  return Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+/**
+ * Format a date string to a readable header (e.g., "Wednesday, January 22")
+ */
+function formatDateHeader(dateStr: string): string {
+  if (dateStr === 'Unknown') return 'Unknown Date';
+  try {
+    return format(parseISO(dateStr), 'EEEE, MMMM d');
+  } catch {
+    return dateStr;
+  }
+}
 
 interface GamesSectionProps {
   games: TodayGame[];
@@ -13,6 +45,10 @@ type ViewMode = 'table' | 'cards';
 
 export function GamesSection({ games }: GamesSectionProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('table');
+
+  // Group games by date
+  const gamesByDate = useMemo(() => groupGamesByDate(games), [games]);
+  const hasMultipleDates = gamesByDate.length > 1;
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
@@ -77,6 +113,29 @@ export function GamesSection({ games }: GamesSectionProps) {
           <p className="text-sm">
             Check back tomorrow or view upcoming games
           </p>
+        </div>
+      ) : hasMultipleDates ? (
+        // Show games grouped by date with headers
+        <div className="space-y-6">
+          {gamesByDate.map(([dateStr, dateGames]) => (
+            <div key={dateStr}>
+              <h3 className="text-sm font-semibold text-blue-400 mb-3 border-b border-gray-700 pb-2">
+                {formatDateHeader(dateStr)}
+                <span className="text-gray-500 font-normal ml-2">
+                  ({dateGames.length} {dateGames.length === 1 ? 'game' : 'games'})
+                </span>
+              </h3>
+              {viewMode === 'table' ? (
+                <GamesTable games={dateGames} />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {dateGames.map((game) => (
+                    <GameCard key={game.id} game={game} />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       ) : viewMode === 'table' ? (
         <GamesTable games={games} />

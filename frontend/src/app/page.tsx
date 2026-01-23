@@ -1,8 +1,24 @@
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { TodayGame, DashboardStats } from '@/lib/types';
 import { PicksList, StatsCard } from '@/components/PicksList';
 import { GamesSection } from '@/components/GamesSection';
+
+/**
+ * Get current date in Eastern timezone.
+ * This ensures consistent date display for college basketball (all games shown in Eastern time).
+ */
+function getEasternDateString(): string {
+  // Create a formatter that outputs the date in Eastern time
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+  return formatter.format(new Date());
+}
 
 // Force dynamic rendering to always fetch fresh data
 export const dynamic = 'force-dynamic';
@@ -92,7 +108,16 @@ async function getStats(): Promise<DashboardStats> {
 export default async function Dashboard() {
   const [games, stats] = await Promise.all([getTodayGames(), getStats()]);
 
-  const today = format(new Date(), 'EEEE, MMMM d, yyyy');
+  // Use Eastern time for date display (games are stored in Eastern time)
+  // Get the date from the first game if available, otherwise use current Eastern time
+  let displayDate: string;
+  if (games.length > 0 && games[0].date) {
+    // Parse the game date (stored as YYYY-MM-DD in Eastern time)
+    displayDate = format(parseISO(games[0].date), 'EEEE, MMMM d, yyyy');
+  } else {
+    // Fallback: use current Eastern time
+    displayDate = getEasternDateString();
+  }
   const isDemo = !isSupabaseConfigured();
 
   return (
@@ -149,7 +174,7 @@ export default async function Dashboard() {
       <main id="main-content" className="max-w-7xl mx-auto px-4 py-8" tabIndex={-1}>
         {/* Date Header */}
         <div className="mb-6">
-          <h2 className="text-xl font-semibold text-white">{today}</h2>
+          <h2 className="text-xl font-semibold text-white">{displayDate}</h2>
           <p className="text-gray-400">
             {games.length} {games.length === 1 ? 'game' : 'games'} on the slate
           </p>

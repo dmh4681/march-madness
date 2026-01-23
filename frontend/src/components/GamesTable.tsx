@@ -1,8 +1,21 @@
 'use client';
 
 import Link from 'next/link';
+import { format, parseISO } from 'date-fns';
 import type { TodayGame } from '@/lib/types';
 import { formatSpread, formatMoneyline } from '@/lib/api';
+
+/**
+ * Format a date string (YYYY-MM-DD) to a short display format (e.g., "Jan 22")
+ */
+function formatGameDate(dateStr: string | null): string {
+  if (!dateStr) return '-';
+  try {
+    return format(parseISO(dateStr), 'MMM d');
+  } catch {
+    return dateStr;
+  }
+}
 
 interface GamesTableProps {
   games: TodayGame[];
@@ -26,6 +39,7 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-700 text-gray-400 text-left">
+            <th className="py-3 px-2 font-medium">Date</th>
             <th className="py-3 px-2 font-medium">Matchup</th>
             <th className="py-3 px-2 font-medium text-center">Spread</th>
             <th className="py-3 px-2 font-medium text-center">O/U</th>
@@ -80,6 +94,11 @@ function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneylin
 
   return (
     <tr className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+      {/* Date */}
+      <td className="py-3 px-2 text-gray-400 text-sm whitespace-nowrap">
+        {formatGameDate(game.date)}
+      </td>
+
       {/* Matchup */}
       <td className="py-3 px-2">
         <Link href={`/games/${game.id}`} className="block hover:text-blue-400">
@@ -194,6 +213,7 @@ export function GamesTableCompact({ games }: GamesTableProps) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b border-gray-700 text-gray-400">
+            <th className="py-2 px-1 font-medium text-left">Date</th>
             <th className="py-2 px-1 font-medium text-left">Away</th>
             <th className="py-2 px-1 font-medium text-left">Home</th>
             <th className="py-2 px-1 font-medium text-center">Spread</th>
@@ -210,6 +230,9 @@ export function GamesTableCompact({ games }: GamesTableProps) {
 
             return (
               <tr key={game.id} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                <td className="py-2 px-1 text-gray-500 whitespace-nowrap">
+                  {formatGameDate(game.date)}
+                </td>
                 <td className="py-2 px-1">
                   <Link href={`/games/${game.id}`} className="hover:text-blue-400">
                     {game.away_rank && <span className="text-yellow-500">#{game.away_rank} </span>}
