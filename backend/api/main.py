@@ -1131,11 +1131,23 @@ def test_kalshi_endpoint():
 
         client = KalshiClient()
 
+        # Debug: check key format (without exposing actual key)
+        key_path_val = client.private_key_path or ""
+        key_debug = {
+            "length": len(key_path_val),
+            "starts_with_dash": key_path_val.startswith("-"),
+            "contains_BEGIN": "BEGIN" in key_path_val,
+            "contains_PRIVATE": "PRIVATE" in key_path_val,
+            "contains_backslash_n": "\\n" in key_path_val,
+            "first_20_chars": key_path_val[:20] if key_path_val else None,
+        }
+
         results = {
             "is_configured": client.is_configured,
             "has_api_key": bool(client.api_key),
             "has_private_key_content": bool(client.private_key_content),
             "has_private_key_path": bool(client.private_key_path),
+            "key_path_debug": key_debug,
             "base_url": KALSHI_BASE_URL,
         }
 
@@ -1147,8 +1159,12 @@ def test_kalshi_endpoint():
         try:
             pk = client.private_key
             results["private_key_loaded"] = pk is not None
+            if pk:
+                results["key_type"] = type(pk).__name__
         except Exception as e:
             results["private_key_error"] = str(e)
+            import traceback
+            results["private_key_traceback"] = traceback.format_exc()[-500:]
 
         async def test_fetch():
             import httpx
