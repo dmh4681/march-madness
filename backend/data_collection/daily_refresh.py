@@ -21,6 +21,31 @@ import requests
 import pandas as pd
 from dotenv import load_dotenv
 
+# Timezone handling - games should be stored in US Eastern time
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except ImportError:
+    from backports.zoneinfo import ZoneInfo  # Fallback for older Python
+
+# US Eastern timezone (handles EST/EDT automatically)
+EASTERN_TZ = ZoneInfo("America/New_York")
+UTC_TZ = ZoneInfo("UTC")
+
+
+def get_eastern_date_today() -> date:
+    """
+    Get today's date in US Eastern time.
+
+    This ensures consistent date handling for college basketball games,
+    which are scheduled and displayed in Eastern time.
+    """
+    return datetime.now(EASTERN_TZ).date()
+
+
+def get_eastern_date_yesterday() -> date:
+    """Get yesterday's date in US Eastern time."""
+    return get_eastern_date_today() - timedelta(days=1)
+
 load_dotenv()
 
 # Configure logging - avoid leaking sensitive info
@@ -208,10 +233,16 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                 # Try to create teams if they don't exist
                 continue
 
-            # Parse game date
+            # Parse game date - IMPORTANT: Convert UTC to Eastern time before extracting date
+            # This ensures a game at 11 PM Eastern shows up on the correct day
+            # (not the next day due to UTC being 4-5 hours ahead)
             game_date = None
             if commence_time:
-                game_date = datetime.fromisoformat(commence_time.replace("Z", "+00:00")).date().isoformat()
+                # Parse UTC time from API
+                utc_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                # Convert to Eastern time, then extract the date
+                eastern_time = utc_time.astimezone(EASTERN_TZ)
+                game_date = eastern_time.date().isoformat()
 
             # Find or create game
             game_result = client.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
@@ -358,7 +389,8 @@ def run_predictions(force_regenerate: bool = False) -> dict:
     client = _ensure_supabase()
 
     # Get upcoming games without predictions
-    today = date.today().isoformat()
+    # Use Eastern time for consistency with game dates
+    today = get_eastern_date_today().isoformat()
 
     # If force regenerate, delete all predictions for upcoming games first
     if force_regenerate:
@@ -467,7 +499,8 @@ def update_game_results() -> dict:
     client = _ensure_supabase()
 
     # Find games that should have finished but don't have scores
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    # Use Eastern time for consistency with game dates
+    yesterday = get_eastern_date_yesterday().isoformat()
 
     result = client.table("games").select("id, external_id").lte("date", yesterday).is_("home_score", "null").limit(50).execute()
 
@@ -487,7 +520,8 @@ def create_today_games_view() -> dict:
     print("\n=== Creating Today's Games View ===")
 
     client = _ensure_supabase()
-    today = date.today().isoformat()
+    # Use Eastern time for consistency with game dates
+    today = get_eastern_date_today().isoformat()
 
     # Get today's games with all related data
     result = client.table("games").select("""
@@ -557,7 +591,8 @@ def run_ai_analysis() -> dict:
     print("\n=== Running AI Analysis ===")
 
     client = _ensure_supabase()
-    today = date.today().isoformat()
+    # Use Eastern time for consistency with game dates
+    today = get_eastern_date_today().isoformat()
 
     # Get today's games
     result = client.table("games").select("id").eq("date", today).execute()
