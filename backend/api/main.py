@@ -1211,6 +1211,16 @@ def test_kalshi_endpoint():
                     if not cursor or not batch:
                         break
 
+                # Get a sample market for debugging
+                sample_market = None
+                if batch:
+                    sample_market = {
+                        "ticker": batch[0].get("ticker"),
+                        "title": batch[0].get("title"),
+                        "category": batch[0].get("category"),
+                        "custom_strike_keys": list(batch[0].get("custom_strike", {}).keys()) if batch[0].get("custom_strike") else None,
+                    }
+
                 return {
                     "status_code": 200,
                     "pages_fetched": pages_fetched,
@@ -1218,6 +1228,7 @@ def test_kalshi_endpoint():
                     "nba_markets_count": nba_count,
                     "cbb_tickers_found": cbb_tickers_found[:20],  # Limit output
                     "cbb_count": len(cbb_tickers_found),
+                    "sample_market": sample_market,
                 }
 
         fetch_result = asyncio.run(test_fetch())
