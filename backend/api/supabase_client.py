@@ -516,6 +516,25 @@ def get_today_games_view() -> list[dict]:
     return result.data
 
 
+def get_upcoming_games_view(days: int = 7) -> list[dict]:
+    """Get upcoming games from the view with flat team names.
+
+    This uses the upcoming_games view which returns data in the same format
+    as today_games (flat home_team/away_team strings, not nested objects).
+    """
+    client = get_supabase()
+    today = get_eastern_date_today()
+    end_date = today + timedelta(days=days)
+
+    result = client.table("upcoming_games").select("*").gte(
+        "date", today.isoformat()
+    ).lte(
+        "date", end_date.isoformat()
+    ).order("date").execute()
+
+    return result.data
+
+
 def get_team_kenpom(team_id: str, season: int = 2025) -> Optional[dict]:
     """Get the latest KenPom rating for a team."""
     client = get_supabase()

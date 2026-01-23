@@ -61,6 +61,7 @@ from .supabase_client import (
     get_game_by_id,
     get_games_by_date,
     get_upcoming_games,
+    get_upcoming_games_view,
     get_today_games_view,
     get_latest_spread,
     get_latest_prediction,
@@ -687,6 +688,9 @@ def get_games(
     """
     Get upcoming games with pagination.
 
+    Returns games in the same flat format as the today_games view,
+    with home_team/away_team as strings (not nested objects).
+
     Query params:
     - start_date: ISO date string (default: today)
     - end_date: ISO date string (default: start + days)
@@ -695,10 +699,9 @@ def get_games(
     - page_size: Number of games per page (default: 20, max: 50)
     """
     try:
-        if start_date:
-            all_games = get_games_by_date(date.fromisoformat(start_date))
-        else:
-            all_games = get_upcoming_games(days)
+        # Use the view which returns flat data (home_team as string, not object)
+        # This matches the format expected by the frontend TodayGame type
+        all_games = get_upcoming_games_view(days)
 
         # Calculate pagination
         total_games = len(all_games)
