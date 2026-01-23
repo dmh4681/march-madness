@@ -483,6 +483,15 @@ def health():
     # Get full secrets status (safe - only returns booleans)
     secrets_status = get_secrets_status()
 
+    # Check Kalshi configuration
+    kalshi_configured = False
+    try:
+        from backend.data_collection.kalshi_client import KalshiClient
+        kalshi_client = KalshiClient()
+        kalshi_configured = kalshi_client.is_configured
+    except Exception:
+        pass
+
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -490,6 +499,7 @@ def health():
         "supabase_configured": secrets_status.get("SUPABASE_URL", {}).get("valid", False),
         "claude_configured": claude_available,
         "grok_configured": grok_available,
+        "kalshi_configured": kalshi_configured,
         # Additional detail about secrets configuration
         "secrets_valid": _secrets_validation.is_valid if '_secrets_validation' in dir() else False,
         "missing_recommended": _secrets_validation.missing_recommended if '_secrets_validation' in dir() else [],
