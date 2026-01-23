@@ -1123,11 +1123,11 @@ def refresh_prediction_markets_endpoint():
 def test_kalshi_endpoint():
     """
     Diagnostic endpoint to test Kalshi API connection and see what markets are available.
-    Returns details about authentication status and any markets found (before filtering).
+    Returns details about authentication status and any CBB markets found.
     """
     try:
         import asyncio
-        from ..data_collection.kalshi_client import KalshiClient, KALSHI_BASE_URL
+        from ..data_collection.kalshi_client import KalshiClient, KALSHI_BASE_URL, CBB_SERIES_PREFIXES
 
         client = KalshiClient()
 
@@ -1149,6 +1149,7 @@ def test_kalshi_endpoint():
             "has_private_key_path": bool(client.private_key_path),
             "key_path_debug": key_debug,
             "base_url": KALSHI_BASE_URL,
+            "cbb_prefixes": CBB_SERIES_PREFIXES,
         }
 
         if not client.is_configured:
@@ -1169,17 +1170,53 @@ def test_kalshi_endpoint():
         async def test_fetch():
             import httpx
 
-            # Try fetching just first page of markets
-            path = "/markets"
-            params = {"limit": 10, "status": "open"}
-            headers = client._get_headers("GET", path)
+            # Fetch multiple pages to find CBB markets
+            cbb_tickers_found = []
+            nba_count = 0
+            total_markets = 0
+            pages_fetched = 0
+            cursor = None
 
             async with httpx.AsyncClient(base_url=KALSHI_BASE_URL, timeout=30.0) as http:
-                response = await http.get(path, headers=headers, params=params)
+                # Fetch up to 5 pages (500 markets)
+                while pages_fetched < 5:
+                    path = "/markets"
+                    params = {"limit": 100, "status": "open"}
+                    if cursor:
+                        params["cursor"] = cursor
+                    headers = client._get_headers("GET", path)
+
+                    response = await http.get(path, headers=headers, params=params)
+                    if response.status_code != 200:
+                        return {
+                            "status_code": response.status_code,
+                            "error": response.text[:200],
+                        }
+
+                    data = response.json()
+                    batch = data.get("markets", [])
+                    total_markets += len(batch)
+                    pages_fetched += 1
+
+                    for m in batch:
+                        ticker = m.get("ticker", "")
+                        # Check if it's NCAAMB
+                        if "NCAAMB" in ticker.upper():
+                            cbb_tickers_found.append(ticker)
+                        elif "KXNBA" in ticker.upper():
+                            nba_count += 1
+
+                    cursor = data.get("cursor")
+                    if not cursor or not batch:
+                        break
 
                 return {
-                    "status_code": response.status_code,
-                    "content_preview": response.text[:500] if response.text else None,
+                    "status_code": 200,
+                    "pages_fetched": pages_fetched,
+                    "total_markets_scanned": total_markets,
+                    "nba_markets_count": nba_count,
+                    "cbb_tickers_found": cbb_tickers_found[:20],  # Limit output
+                    "cbb_count": len(cbb_tickers_found),
                 }
 
         fetch_result = asyncio.run(test_fetch())
