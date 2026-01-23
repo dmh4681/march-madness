@@ -1119,6 +1119,68 @@ def refresh_prediction_markets_endpoint():
         raise HTTPException(status_code=500, detail="Prediction market refresh failed. Please try again later.")
 
 
+@app.get("/test-kalshi")
+def test_kalshi_endpoint():
+    """
+    Diagnostic endpoint to test Kalshi API connection and see what markets are available.
+    Returns details about authentication status and any markets found (before filtering).
+    """
+    try:
+        import asyncio
+        from ..data_collection.kalshi_client import KalshiClient, KALSHI_BASE_URL
+
+        client = KalshiClient()
+
+        results = {
+            "is_configured": client.is_configured,
+            "has_api_key": bool(client.api_key),
+            "has_private_key_content": bool(client.private_key_content),
+            "has_private_key_path": bool(client.private_key_path),
+            "base_url": KALSHI_BASE_URL,
+        }
+
+        if not client.is_configured:
+            results["error"] = "Kalshi not configured"
+            return results
+
+        # Test the private key loading
+        try:
+            pk = client.private_key
+            results["private_key_loaded"] = pk is not None
+        except Exception as e:
+            results["private_key_error"] = str(e)
+
+        async def test_fetch():
+            import httpx
+
+            # Try fetching just first page of markets
+            path = "/markets"
+            params = {"limit": 10, "status": "open"}
+            headers = client._get_headers("GET", path)
+
+            async with httpx.AsyncClient(base_url=KALSHI_BASE_URL, timeout=30.0) as http:
+                response = await http.get(path, headers=headers, params=params)
+
+                return {
+                    "status_code": response.status_code,
+                    "content_preview": response.text[:500] if response.text else None,
+                }
+
+        fetch_result = asyncio.run(test_fetch())
+        results.update(fetch_result)
+
+        # Close the client
+        asyncio.run(client.close())
+
+        return results
+
+    except ImportError as e:
+        return {"error": f"Import error: {e}"}
+    except Exception as e:
+        logger.error(f"Kalshi test failed: {e}", exc_info=True)
+        return {"error": str(e)}
+
+
 @app.post("/refresh-espn-times")
 def refresh_espn_times_endpoint(
     days: Annotated[
