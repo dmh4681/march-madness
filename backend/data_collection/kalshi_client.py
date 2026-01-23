@@ -37,10 +37,16 @@ class KalshiClient:
     Client for Kalshi Trade API v2.
 
     Requires RSA-PSS-SHA256 signed requests for authentication.
+
+    Environment variables:
+        KALSHI_API_KEY: Your Kalshi API key
+        KALSHI_PRIVATE_KEY: The private key content (PEM format, can include \\n for newlines)
+        KALSHI_PRIVATE_KEY_PATH: Alternative - path to private key file (for local dev)
     """
 
     def __init__(self):
         self.api_key = os.getenv("KALSHI_API_KEY")
+        self.private_key_content = os.getenv("KALSHI_PRIVATE_KEY")
         self.private_key_path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
         self._private_key = None
         self.client = httpx.AsyncClient(
@@ -51,21 +57,37 @@ class KalshiClient:
     @property
     def is_configured(self) -> bool:
         """Check if Kalshi credentials are configured."""
-        return bool(self.api_key and self.private_key_path)
+        return bool(self.api_key and (self.private_key_content or self.private_key_path))
 
     @property
     def private_key(self):
-        """Lazy load private key from file."""
-        if self._private_key is None and self.private_key_path:
+        """Lazy load private key from env var or file."""
+        if self._private_key is None:
             try:
                 from cryptography.hazmat.primitives import serialization
 
-                with open(self.private_key_path, "rb") as f:
+                key_data = None
+
+                # First try env var with key content directly
+                if self.private_key_content:
+                    # Handle escaped newlines from env vars
+                    key_str = self.private_key_content.replace("\\n", "\n")
+                    key_data = key_str.encode()
+                    logger.info("Loading Kalshi private key from KALSHI_PRIVATE_KEY env var")
+
+                # Fall back to file path
+                elif self.private_key_path:
+                    with open(self.private_key_path, "rb") as f:
+                        key_data = f.read()
+                    logger.info(f"Loading Kalshi private key from file: {self.private_key_path}")
+
+                if key_data:
                     self._private_key = serialization.load_pem_private_key(
-                        f.read(),
+                        key_data,
                         password=None
                     )
-                logger.info("Kalshi private key loaded successfully")
+                    logger.info("Kalshi private key loaded successfully")
+
             except FileNotFoundError:
                 logger.error(f"Kalshi private key file not found: {self.private_key_path}")
             except Exception as e:
