@@ -1089,6 +1089,36 @@ def refresh_haslametrics_endpoint():
         raise HTTPException(status_code=500, detail="Haslametrics refresh failed. Please try again later.")
 
 
+@app.post("/refresh-prediction-markets")
+def refresh_prediction_markets_endpoint():
+    """
+    Quick endpoint to refresh only prediction market data (Polymarket + Kalshi).
+    Much faster than full /refresh - useful for testing.
+    """
+    try:
+        import asyncio
+        from ..data_collection.prediction_market_scraper import refresh_prediction_markets
+
+        results = asyncio.run(refresh_prediction_markets())
+
+        return {
+            "status": results.get("status", "success"),
+            "timestamp": results.get("timestamp"),
+            "polymarket": results.get("polymarket", {}),
+            "kalshi": results.get("kalshi", {}),
+            "arbitrage": results.get("arbitrage", {}),
+        }
+    except ImportError as e:
+        logger.error(f"Prediction market import error: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": "Service configuration error",
+        }
+    except Exception as e:
+        logger.error(f"Prediction market refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Prediction market refresh failed. Please try again later.")
+
+
 @app.post("/refresh-espn-times")
 def refresh_espn_times_endpoint(
     days: Annotated[
