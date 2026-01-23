@@ -357,9 +357,10 @@ def fetch_cbbpy_games() -> list[dict]:
     try:
         from cbbpy.mens_scraper import get_games_range
 
-        # Get games from past week and next week
-        start_date = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
-        end_date = (date.today() + timedelta(days=7)).strftime("%Y-%m-%d")
+        # Get games from past week and next week (use Eastern time for consistency)
+        today = get_eastern_date_today()
+        start_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+        end_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
 
         games_df = get_games_range(start_date, end_date)
 

@@ -413,7 +413,8 @@ def get_latest_prediction(game_id: str) -> Optional[dict]:
 def get_predictions_by_confidence(confidence_tier: str, limit: int = 10) -> list[dict]:
     """Get predictions by confidence tier."""
     client = get_supabase()
-    today = date.today()
+    # Use Eastern time for consistency with game dates
+    today = get_eastern_date_today()
 
     result = client.table("predictions").select(
         "*, game:games(*, home_team:teams!games_home_team_id_fkey(*), away_team:teams!games_away_team_id_fkey(*))"
