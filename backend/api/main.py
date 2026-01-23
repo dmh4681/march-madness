@@ -1122,132 +1122,82 @@ def refresh_prediction_markets_endpoint():
 @app.get("/test-kalshi")
 def test_kalshi_endpoint():
     """
-    Diagnostic endpoint to test Kalshi API connection and see what markets are available.
-    Returns details about authentication status and any CBB markets found.
+    Diagnostic endpoint to test Kalshi API connection.
+    Returns authentication status and market availability summary.
     """
     try:
         import asyncio
-        from ..data_collection.kalshi_client import KalshiClient, KALSHI_BASE_URL, CBB_SERIES_PREFIXES
+        from ..data_collection.kalshi_client import KalshiClient, KALSHI_BASE_URL
 
         client = KalshiClient()
-
-        # Debug: check key format (without exposing actual key)
-        key_path_val = client.private_key_path or ""
-        key_debug = {
-            "length": len(key_path_val),
-            "starts_with_dash": key_path_val.startswith("-"),
-            "contains_BEGIN": "BEGIN" in key_path_val,
-            "contains_PRIVATE": "PRIVATE" in key_path_val,
-            "contains_backslash_n": "\\n" in key_path_val,
-            "first_20_chars": key_path_val[:20] if key_path_val else None,
-        }
 
         results = {
             "is_configured": client.is_configured,
             "has_api_key": bool(client.api_key),
-            "has_private_key_content": bool(client.private_key_content),
-            "has_private_key_path": bool(client.private_key_path),
-            "key_path_debug": key_debug,
-            "base_url": KALSHI_BASE_URL,
-            "cbb_prefixes": CBB_SERIES_PREFIXES,
+            "has_private_key": bool(client.private_key_content or client.private_key_path),
         }
 
         if not client.is_configured:
-            results["error"] = "Kalshi not configured"
+            results["error"] = "Kalshi not configured - need KALSHI_API_KEY and KALSHI_PRIVATE_KEY"
             return results
 
         # Test the private key loading
         try:
             pk = client.private_key
             results["private_key_loaded"] = pk is not None
-            if pk:
-                results["key_type"] = type(pk).__name__
         except Exception as e:
             results["private_key_error"] = str(e)
-            import traceback
-            results["private_key_traceback"] = traceback.format_exc()[-500:]
+            return results
 
         async def test_fetch():
-            import httpx
-
-            # Fetch multiple pages to find CBB markets
-            cbb_tickers_found = []
-            nba_count = 0
-            total_markets = 0
-            pages_fetched = 0
+            # Quick scan of first 500 markets
+            standalone_cbb = 0
+            parlay_cbb = 0
+            total = 0
             cursor = None
 
-            async with httpx.AsyncClient(base_url=KALSHI_BASE_URL, timeout=30.0) as http:
-                # Fetch up to 20 pages (2000 markets) to find standalone CBB
-                while pages_fetched < 20:
-                    path = "/markets"
-                    params = {"limit": 100, "status": "open"}
-                    if cursor:
-                        params["cursor"] = cursor
-                    headers = client._get_headers("GET", path)
+            for _ in range(5):  # 5 pages
+                path = "/markets"
+                params = {"limit": 100, "status": "open"}
+                if cursor:
+                    params["cursor"] = cursor
+                headers = client._get_headers("GET", path)
 
-                    response = await http.get(path, headers=headers, params=params)
-                    if response.status_code != 200:
-                        return {
-                            "status_code": response.status_code,
-                            "error": response.text[:200],
-                        }
+                response = await client.client.get(path, headers=headers, params=params)
+                if response.status_code != 200:
+                    return {"api_status": response.status_code, "error": "API request failed"}
 
-                    data = response.json()
-                    batch = data.get("markets", [])
-                    total_markets += len(batch)
-                    pages_fetched += 1
+                data = response.json()
+                batch = data.get("markets", [])
+                total += len(batch)
 
-                    standalone_prefixes = ["KXNCAAMB", "KXNCAAB", "NCAAM", "NCAAB", "CBB"]
-                    for m in batch:
-                        ticker = m.get("ticker", "")
-                        title = m.get("title", "") or ""
-                        market_str = str(m)  # Convert entire market to string for searching
+                for m in batch:
+                    ticker = m.get("ticker", "")
+                    market_str = str(m)
 
-                        # Check if it's a standalone NCAAMB market (not a parlay)
-                        is_standalone = any(ticker.upper().startswith(p) for p in standalone_prefixes)
-                        if is_standalone:
-                            cbb_tickers_found.append({"ticker": ticker, "title": title[:80], "type": "standalone"})
-                        # Check for NCAAMB in multi-game parlays
-                        elif "NCAAMB" in market_str.upper() and "MULTIGAME" in ticker.upper():
-                            cbb_tickers_found.append({"ticker": ticker[:50], "title": title[:50], "type": "parlay"})
-                        elif "NBA" in market_str.upper() and "NCAA" not in market_str.upper():
-                            nba_count += 1
+                    if ticker.upper().startswith("KXNCAAMB"):
+                        standalone_cbb += 1
+                    elif "NCAAMB" in market_str.upper():
+                        parlay_cbb += 1
 
-                    cursor = data.get("cursor")
-                    if not cursor or not batch:
-                        break
+                cursor = data.get("cursor")
+                if not cursor or not batch:
+                    break
 
-                # Get a sample market for debugging
-                sample_market = None
-                if batch:
-                    sample_market = {
-                        "ticker": batch[0].get("ticker"),
-                        "title": batch[0].get("title"),
-                        "category": batch[0].get("category"),
-                        "custom_strike_keys": list(batch[0].get("custom_strike", {}).keys()) if batch[0].get("custom_strike") else None,
-                    }
-
-                return {
-                    "status_code": 200,
-                    "pages_fetched": pages_fetched,
-                    "total_markets_scanned": total_markets,
-                    "nba_markets_count": nba_count,
-                    "cbb_tickers_found": cbb_tickers_found[:20],  # Limit output
-                    "cbb_count": len(cbb_tickers_found),
-                    "sample_market": sample_market,
-                }
+            return {
+                "api_status": 200,
+                "markets_scanned": total,
+                "standalone_cbb_markets": standalone_cbb,
+                "parlay_cbb_references": parlay_cbb,
+                "note": "Kalshi currently has NCAAMB only in multi-game parlays, not standalone markets"
+            }
 
         fetch_result = asyncio.run(test_fetch())
         results.update(fetch_result)
-
-        # Close the client
         asyncio.run(client.close())
 
         return results
 
-    except ImportError as e:
-        return {"error": f"Import error: {e}"}
     except Exception as e:
         logger.error(f"Kalshi test failed: {e}", exc_info=True)
         return {"error": str(e)}
