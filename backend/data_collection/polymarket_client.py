@@ -69,6 +69,21 @@ class PolymarketClient:
                             market_id = str(m.get("id", ""))
                             title = (m.get("question", "") or m.get("title", "")).lower()
 
+                            # Exclude NFL/other sports
+                            is_nfl = any(x in title for x in [
+                                "super bowl", "nfc championship", "afc championship",
+                                "nfl", "patriots", "chiefs", "eagles", "49ers",
+                                "cowboys", "packers", "ravens", "bills", "dolphins",
+                                "jets", "steelers", "bengals", "browns", "colts",
+                                "texans", "jaguars", "titans", "broncos", "chargers",
+                                "raiders", "rams", "cardinals", "saints", "falcons",
+                                "panthers", "buccaneers", "commanders", "giants",
+                                "bears", "lions", "vikings",
+                            ])
+
+                            if is_nfl:
+                                continue
+
                             # Filter to basketball-related only (tag 100639 has mixed sports)
                             is_basketball = any(x in title for x in [
                                 "basketball", "ncaa", "march madness", "final four",
