@@ -1,4 +1,3 @@
-import { addDays } from 'date-fns';
 import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { GamesList } from '@/components/GamesList';
@@ -8,12 +7,12 @@ import type { TodayGame } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// Demo data for games listing - only first page
+// Demo data for games listing - uses static dates to avoid hydration mismatches
 const DEMO_GAMES: TodayGame[] = [
   {
     id: 'demo-1',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 3600000).toISOString(),
+    date: '2025-01-22',
+    tip_time: '2025-01-22T19:00:00Z',
     home_team: 'Duke Blue Devils',
     home_conference: 'ACC',
     away_team: 'North Carolina Tar Heels',
@@ -32,8 +31,8 @@ const DEMO_GAMES: TodayGame[] = [
   },
   {
     id: 'demo-2',
-    date: new Date().toISOString(),
-    tip_time: new Date(Date.now() + 7200000).toISOString(),
+    date: '2025-01-22',
+    tip_time: '2025-01-22T21:00:00Z',
     home_team: 'Houston Cougars',
     home_conference: 'Big 12',
     away_team: 'Kansas Jayhawks',
@@ -52,8 +51,8 @@ const DEMO_GAMES: TodayGame[] = [
   },
   {
     id: 'demo-3',
-    date: addDays(new Date(), 1).toISOString(),
-    tip_time: addDays(new Date(), 1).toISOString(),
+    date: '2025-01-23',
+    tip_time: '2025-01-23T19:00:00Z',
     home_team: 'Kentucky Wildcats',
     home_conference: 'SEC',
     away_team: 'Tennessee Volunteers',
@@ -72,8 +71,8 @@ const DEMO_GAMES: TodayGame[] = [
   },
   {
     id: 'demo-4',
-    date: addDays(new Date(), 1).toISOString(),
-    tip_time: addDays(new Date(), 1).toISOString(),
+    date: '2025-01-23',
+    tip_time: '2025-01-23T21:00:00Z',
     home_team: 'UCLA Bruins',
     home_conference: 'Big Ten',
     away_team: 'Arizona Wildcats',
@@ -92,8 +91,8 @@ const DEMO_GAMES: TodayGame[] = [
   },
   {
     id: 'demo-5',
-    date: addDays(new Date(), 2).toISOString(),
-    tip_time: addDays(new Date(), 2).toISOString(),
+    date: '2025-01-24',
+    tip_time: '2025-01-24T19:00:00Z',
     home_team: 'Gonzaga Bulldogs',
     home_conference: 'WCC',
     away_team: 'Saint Mary\'s Gaels',
@@ -112,8 +111,8 @@ const DEMO_GAMES: TodayGame[] = [
   },
   {
     id: 'demo-6',
-    date: addDays(new Date(), 2).toISOString(),
-    tip_time: addDays(new Date(), 2).toISOString(),
+    date: '2025-01-24',
+    tip_time: '2025-01-24T21:00:00Z',
     home_team: 'Purdue Boilermakers',
     home_conference: 'Big Ten',
     away_team: 'Michigan State Spartans',

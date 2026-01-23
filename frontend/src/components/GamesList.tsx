@@ -15,7 +15,8 @@ interface GamesListProps {
 // Group games by date for display
 function groupGamesByDate(games: TodayGame[]): Record<string, TodayGame[]> {
   return games.reduce((acc, game) => {
-    const dateKey = game.date.split('T')[0];
+    // Handle undefined/null dates - use 'Unknown' as fallback
+    const dateKey = game.date ? game.date.split('T')[0] : 'Unknown';
     if (!acc[dateKey]) {
       acc[dateKey] = [];
     }
@@ -128,8 +129,14 @@ function GamesListContent({ initialGames = [], days = 7 }: GamesListProps) {
           <div key={dateStr}>
             <h2 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4 border-b border-gray-800 pb-2 sticky top-[60px] sm:top-[72px] bg-black z-10 -mx-3 px-3 sm:mx-0 sm:px-0">
               {/* Short date format on mobile, full on desktop */}
-              <span className="sm:hidden">{format(new Date(dateStr), 'EEE, MMM d')}</span>
-              <span className="hidden sm:inline">{format(new Date(dateStr), 'EEEE, MMMM d, yyyy')}</span>
+              {dateStr === 'Unknown' ? (
+                <span>Unknown Date</span>
+              ) : (
+                <>
+                  <span className="sm:hidden">{format(new Date(dateStr), 'EEE, MMM d')}</span>
+                  <span className="hidden sm:inline">{format(new Date(dateStr), 'EEEE, MMMM d, yyyy')}</span>
+                </>
+              )}
               <span className="text-sm font-normal text-gray-400 ml-2">
                 ({dateGames.length} {dateGames.length === 1 ? 'game' : 'games'})
               </span>
