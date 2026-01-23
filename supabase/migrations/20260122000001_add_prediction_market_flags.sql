@@ -98,10 +98,11 @@ SELECT
     (claude.id IS NOT NULL) as has_claude_analysis,
     (grok.id IS NOT NULL) as has_grok_analysis,
 
-    -- Prediction market flags
+    -- Prediction market flags (check both game-level and team-level markets)
     (EXISTS (
         SELECT 1 FROM prediction_markets pm
-        WHERE pm.game_id = g.id AND pm.status = 'open'
+        WHERE pm.status = 'open'
+        AND (pm.game_id = g.id OR pm.team_id = ht.id OR pm.team_id = at.id)
     )) as has_prediction_data,
     (EXISTS (
         SELECT 1 FROM arbitrage_opportunities ao
@@ -252,10 +253,11 @@ SELECT
     (claude.id IS NOT NULL) as has_claude_analysis,
     (grok.id IS NOT NULL) as has_grok_analysis,
 
-    -- Prediction market flags
+    -- Prediction market flags (check both game-level and team-level markets)
     (EXISTS (
         SELECT 1 FROM prediction_markets pm
-        WHERE pm.game_id = g.id AND pm.status = 'open'
+        WHERE pm.status = 'open'
+        AND (pm.game_id = g.id OR pm.team_id = ht.id OR pm.team_id = at.id)
     )) as has_prediction_data,
     (EXISTS (
         SELECT 1 FROM arbitrage_opportunities ao

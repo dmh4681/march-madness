@@ -264,6 +264,7 @@ def extract_futures_team(market_title: str) -> Optional[str]:
     - "Duke to win NCAA Championship"
     - "Will Kansas make Final Four?"
     - "Kentucky: National Champion"
+    - "Will Michigan be a number 1 seed in the 2026 NCAA..."
     """
     if not market_title:
         return None
@@ -272,8 +273,8 @@ def extract_futures_team(market_title: str) -> Optional[str]:
         # "Duke to win..."
         r"^(.+?)\s+to\s+win",
 
-        # "Will Duke win/make..."
-        r"[Ww]ill\s+(.+?)\s+(?:win|make|reach|advance)",
+        # "Will Duke win/make/reach/advance/be..."
+        r"[Ww]ill\s+(.+?)\s+(?:win|make|reach|advance|be\s+a)",
 
         # "Duke: Champion" or "Duke - Champion"
         r"^(.+?)[\:\-]\s*(?:National\s+)?Champion",
@@ -283,6 +284,9 @@ def extract_futures_team(market_title: str) -> Optional[str]:
 
         # "Can Duke win..."
         r"[Cc]an\s+(.+?)\s+win",
+
+        # "Will Duke be a number 1 seed" - more specific pattern
+        r"[Ww]ill\s+(.+?)\s+be\s+",
     ]
 
     for pattern in patterns:

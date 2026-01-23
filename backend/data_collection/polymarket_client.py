@@ -30,90 +30,75 @@ class PolymarketClient:
         """
         Fetch all college basketball markets.
 
-        Searches multiple relevant tags since Polymarket doesn't have
-        consistent tagging for college basketball.
+        Uses Polymarket's tag_id system:
+        - Tag 100149: NCAAB futures (e.g., "#1 seed" markets)
+        - Tag 100639: Game-specific markets (team vs team)
         """
         markets = []
-
-        # Try multiple relevant tags and search terms
-        tags = [
-            "college-basketball",
-            "ncaa",
-            "march-madness",
-            "ncaa-basketball",
-            "cbb",
-            "ncaab",
-        ]
-
-        search_terms = [
-            "NCAA",
-            "March Madness",
-            "college basketball",
-            "Final Four",
-        ]
-
         seen_ids = set()
 
-        # Search by tags
-        for tag in tags:
-            try:
-                response = await self.client.get(
-                    "/markets",
-                    params={
-                        "tag": tag,
+        # NCAAB-specific tag IDs discovered from /sports endpoint
+        ncaab_tag_ids = [
+            "100149",  # NCAAB futures (March Madness seeding, championship)
+            "100639",  # Game-specific markets
+        ]
+
+        # Fetch markets by tag_id
+        for tag_id in ncaab_tag_ids:
+            cursor = None
+            pages_fetched = 0
+            max_pages = 5  # Limit to prevent infinite loops
+
+            while pages_fetched < max_pages:
+                try:
+                    params = {
+                        "tag_id": tag_id,
                         "closed": "false",
                         "limit": 100
                     }
-                )
+                    if cursor:
+                        params["cursor"] = cursor
 
-                if response.status_code == 200:
-                    data = response.json()
-                    batch = data if isinstance(data, list) else data.get("markets", [])
+                    response = await self.client.get("/markets", params=params)
 
-                    for m in batch:
-                        market_id = str(m.get("id", ""))
-                        if market_id and market_id not in seen_ids:
-                            seen_ids.add(market_id)
-                            markets.append(m)
+                    if response.status_code == 200:
+                        data = response.json()
+                        batch = data if isinstance(data, list) else data.get("markets", [])
 
-            except Exception as e:
-                logger.warning(f"Error fetching Polymarket tag '{tag}': {e}")
-                continue
+                        for m in batch:
+                            market_id = str(m.get("id", ""))
+                            title = (m.get("question", "") or m.get("title", "")).lower()
 
-        # Search by keywords
-        for term in search_terms:
-            try:
-                response = await self.client.get(
-                    "/markets",
-                    params={
-                        "search": term,
-                        "closed": "false",
-                        "limit": 50
-                    }
-                )
+                            # Filter to basketball-related only (tag 100639 has mixed sports)
+                            is_basketball = any(x in title for x in [
+                                "basketball", "ncaa", "march madness", "final four",
+                                "tournament", "elite eight", "sweet sixteen",
+                                # Common college basketball team names as backup
+                                "duke", "kentucky", "kansas", "unc", "gonzaga",
+                                "villanova", "purdue", "houston", "uconn",
+                            ]) or "vs." in title or "vs " in title
 
-                if response.status_code == 200:
-                    data = response.json()
-                    batch = data if isinstance(data, list) else data.get("markets", [])
+                            # Tag 100149 is specifically NCAAB, trust it
+                            if tag_id == "100149":
+                                is_basketball = True
 
-                    for m in batch:
-                        market_id = str(m.get("id", ""))
-                        # Filter to only basketball-related
-                        title = m.get("question", "") or m.get("title", "")
-                        title_lower = title.lower()
+                            if market_id and market_id not in seen_ids and is_basketball:
+                                seen_ids.add(market_id)
+                                markets.append(m)
 
-                        is_basketball = any(x in title_lower for x in [
-                            "basketball", "ncaa", "march madness", "final four",
-                            "tournament", "elite eight", "sweet sixteen"
-                        ])
+                        # Handle pagination
+                        if isinstance(data, dict) and data.get("next_cursor"):
+                            cursor = data["next_cursor"]
+                            pages_fetched += 1
+                        else:
+                            break
+                    else:
+                        logger.warning(f"Polymarket tag {tag_id} returned {response.status_code}")
+                        break
 
-                        if market_id and market_id not in seen_ids and is_basketball:
-                            seen_ids.add(market_id)
-                            markets.append(m)
-
-            except Exception as e:
-                logger.warning(f"Error searching Polymarket for '{term}': {e}")
-                continue
+                except Exception as e:
+                    logger.warning(f"Error fetching Polymarket tag_id '{tag_id}': {e}")
+                    break
 
         logger.info(f"Polymarket: Found {len(markets)} college basketball markets")
         return markets
@@ -140,45 +125,53 @@ class PolymarketClient:
         """
         outcomes = []
 
-        # Polymarket uses various structures for outcomes
-        raw_outcomes = raw.get("outcomes", []) or raw.get("outcomePrices", [])
+        # Polymarket returns separate arrays for outcome names and prices
+        # outcomes: ["Yes", "No"] (or team names for multi-outcome)
+        # outcomePrices: ["0.505", "0.495"] (string prices as decimals 0-1)
+        outcome_names = raw.get("outcomes", [])
+        outcome_prices = raw.get("outcomePrices", [])
 
-        if isinstance(raw_outcomes, list):
-            for i, outcome in enumerate(raw_outcomes):
-                if isinstance(outcome, dict):
-                    outcomes.append({
-                        "name": outcome.get("name") or outcome.get("outcome") or f"Outcome {i+1}",
-                        "price": float(outcome.get("price", 0) or 0),
-                        "volume": float(outcome.get("volume", 0) or 0)
-                    })
-                elif isinstance(outcome, (int, float, str)):
-                    # Just prices, need to get names separately
-                    name = f"Outcome {i+1}"
-                    if i == 0:
-                        name = "Yes"
-                    elif i == 1:
-                        name = "No"
-                    outcomes.append({
-                        "name": name,
-                        "price": float(outcome),
-                        "volume": 0
-                    })
+        # Handle string format (JSON string arrays)
+        if isinstance(outcome_names, str):
+            try:
+                import json
+                outcome_names = json.loads(outcome_names)
+            except (json.JSONDecodeError, TypeError):
+                outcome_names = []
 
-        # If no outcomes parsed, try other fields
-        if not outcomes:
-            # Some markets have outcomePrices as comma-separated string
-            prices_str = raw.get("outcomePrices", "")
-            if isinstance(prices_str, str) and "," in prices_str:
+        if isinstance(outcome_prices, str):
+            try:
+                import json
+                outcome_prices = json.loads(outcome_prices)
+            except (json.JSONDecodeError, TypeError):
+                outcome_prices = []
+
+        # Combine names and prices
+        if outcome_names and outcome_prices:
+            for i, name in enumerate(outcome_names):
+                price = 0.0
+                if i < len(outcome_prices):
+                    try:
+                        price = float(outcome_prices[i])
+                    except (ValueError, TypeError):
+                        price = 0.0
+                outcomes.append({
+                    "name": str(name),
+                    "price": price,
+                    "volume": float(raw.get("volume", 0) or 0)
+                })
+        elif outcome_prices:
+            # Only prices, use default names
+            for i, price_str in enumerate(outcome_prices):
                 try:
-                    prices = [float(p) for p in prices_str.split(",")]
-                    for i, price in enumerate(prices):
-                        outcomes.append({
-                            "name": "Yes" if i == 0 else "No",
-                            "price": price,
-                            "volume": 0
-                        })
-                except ValueError:
-                    pass
+                    price = float(price_str)
+                except (ValueError, TypeError):
+                    price = 0.0
+                outcomes.append({
+                    "name": "Yes" if i == 0 else "No",
+                    "price": price,
+                    "volume": 0
+                })
 
         # Determine market type from title
         title = raw.get("question", "") or raw.get("title", "")
