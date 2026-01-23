@@ -105,12 +105,17 @@ march-madness/
 - `bet_results` - Tracking actual bet outcomes
 - `kenpom_ratings` - KenPom advanced analytics (AdjO, AdjD, tempo, SOS, luck)
 - `haslametrics_ratings` - Haslametrics analytics (All-Play %, momentum, efficiency)
+- `prediction_markets` - Polymarket/Kalshi prediction market data
+- `prediction_market_prices` - Historical price snapshots
+- `arbitrage_opportunities` - Detected edges between prediction markets and sportsbooks
 
 **Views:**
-- `today_games` - Today's games with all joined data
-- `upcoming_games` - Next 7 days of games
+- `today_games` - Today's games with all joined data (includes AI and PM flags)
+- `upcoming_games` - Next 7 days of games (includes AI and PM flags)
 - `latest_kenpom_ratings` - Most recent KenPom data per team
 - `latest_haslametrics_ratings` - Most recent Haslametrics data per team
+- `game_prediction_markets` - Prediction markets matched to games
+- `actionable_arbitrage` - Arbitrage opportunities with >=10% edge
 
 ## Environment Variables
 
@@ -136,6 +141,10 @@ ALLOWED_ORIGINS=https://confcontrarian.com,https://www.confcontrarian.com
 # KenPom Integration (requires subscription)
 KENPOM_EMAIL=
 KENPOM_PASSWORD=
+
+# Kalshi Prediction Markets (optional, requires API credentials)
+KALSHI_API_KEY=
+KALSHI_PRIVATE_KEY_PATH=  # Path to RSA private key file
 ```
 
 ## Development Commands
@@ -169,6 +178,8 @@ python -m backend.data_collection.kenpom_scraper
    - Fetches spreads + moneylines from The Odds API
    - Refreshes KenPom advanced analytics (if credentials configured)
    - Refreshes Haslametrics analytics (FREE - no login required)
+   - Refreshes prediction market data from Polymarket + Kalshi
+   - Detects arbitrage opportunities (>=10% edge threshold)
    - Creates/updates games in Supabase
    - Runs predictions on upcoming games
    - Runs Claude AI analysis on today's games
@@ -212,16 +223,19 @@ The AI service (`backend/api/ai_service.py`) uses Claude and Grok to analyze gam
 - Game detail pages with full AI analysis
 - **Dual AI providers:** Claude and Grok analysis on every game
 - **Dual analytics sources:** KenPom AND Haslametrics data displayed
+- **Prediction market integration:** Polymarket + Kalshi data for arbitrage detection
 - "Run AI Analysis" button with provider selection (Claude/Grok)
 - Daily refresh pipeline (GitHub Actions)
 - KenPom advanced analytics integration
 - Haslametrics advanced analytics integration (FREE)
 - AI analysis enhanced with both KenPom and Haslametrics data
+- AI analysis includes prediction market data and arbitrage signals
 - AI cross-validates between analytics sources when both available
 - SQL views prioritize AI analysis over baseline predictions
 - Spread-based probability heuristics for baseline model
-- Compact table view with games showing Pick, Confidence, and Edge
+- Compact table view with games showing Pick, Confidence, Edge, and PM indicators
 - Moneyline data capture and display
+- Arbitrage detection (>=10% edge threshold)
 - Custom domain: confcontrarian.com
 - Security hardening (CORS validation, input sanitization, error handling)
 

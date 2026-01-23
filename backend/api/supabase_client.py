@@ -585,3 +585,95 @@ def calculate_season_stats(season: int) -> dict:
         "units_won": total_won,
         "roi_pct": (total_won / total_wagered * 100) if total_wagered > 0 else 0,
     }
+
+
+# ============================================
+# PREDICTION MARKETS
+# ============================================
+
+
+def get_game_prediction_markets(game_id: str) -> list[dict]:
+    """Get all prediction markets for a game."""
+    # SECURITY: Validate UUID format
+    validated_id = _validate_uuid(game_id, "game_id")
+
+    client = get_supabase()
+    result = client.table("prediction_markets").select("*").eq(
+        "game_id", validated_id
+    ).eq("status", "open").order("captured_at", desc=True).execute()
+
+    return result.data or []
+
+
+def get_team_prediction_markets(team_id: str) -> list[dict]:
+    """Get futures markets for a team."""
+    # SECURITY: Validate UUID format
+    validated_id = _validate_uuid(team_id, "team_id")
+
+    client = get_supabase()
+    result = client.table("prediction_markets").select("*").eq(
+        "team_id", validated_id
+    ).eq("status", "open").order("captured_at", desc=True).execute()
+
+    return result.data or []
+
+
+def get_game_arbitrage_opportunities(game_id: str) -> list[dict]:
+    """Get arbitrage opportunities for a game."""
+    # SECURITY: Validate UUID format
+    validated_id = _validate_uuid(game_id, "game_id")
+
+    client = get_supabase()
+    # Only get recent opportunities (last 24 hours)
+    result = client.table("arbitrage_opportunities").select("*").eq(
+        "game_id", validated_id
+    ).order("captured_at", desc=True).limit(10).execute()
+
+    return result.data or []
+
+
+def get_actionable_arbitrage() -> list[dict]:
+    """Get all actionable arbitrage opportunities."""
+    client = get_supabase()
+
+    # Try to use the view first
+    try:
+        result = client.table("actionable_arbitrage").select("*").execute()
+        return result.data or []
+    except Exception:
+        # Fallback to direct query
+        result = client.table("arbitrage_opportunities").select("*").eq(
+            "is_actionable", True
+        ).order("delta", desc=True).limit(20).execute()
+        return result.data or []
+
+
+def upsert_prediction_market(market_data: dict) -> dict:
+    """Insert or update a prediction market."""
+    client = get_supabase()
+
+    # Validate game_id if provided
+    if market_data.get("game_id"):
+        market_data["game_id"] = _validate_uuid(market_data["game_id"], "game_id")
+
+    # Validate team_id if provided
+    if market_data.get("team_id"):
+        market_data["team_id"] = _validate_uuid(market_data["team_id"], "team_id")
+
+    result = client.table("prediction_markets").upsert(
+        market_data, on_conflict="source,market_id"
+    ).execute()
+
+    return result.data[0] if result.data else {}
+
+
+def insert_arbitrage_opportunity(opportunity_data: dict) -> dict:
+    """Insert an arbitrage opportunity."""
+    client = get_supabase()
+
+    # Validate IDs
+    if opportunity_data.get("game_id"):
+        opportunity_data["game_id"] = _validate_uuid(opportunity_data["game_id"], "game_id")
+
+    result = client.table("arbitrage_opportunities").insert(opportunity_data).execute()
+    return result.data[0] if result.data else {}

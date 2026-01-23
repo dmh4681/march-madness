@@ -606,6 +606,26 @@ def refresh_espn_tip_times(days: int = 7) -> dict:
         return {"status": "error", "error": str(e)}
 
 
+def refresh_prediction_markets() -> dict:
+    """Refresh prediction market data from Polymarket and Kalshi."""
+    print("\n=== Refreshing Prediction Markets ===")
+
+    try:
+        import asyncio
+        from .prediction_market_scraper import refresh_prediction_markets as pm_refresh
+
+        # Run the async prediction market refresh
+        results = asyncio.run(pm_refresh())
+        return results
+
+    except ImportError as e:
+        print(f"Prediction market scraper import error: {e}")
+        return {"status": "error", "error": str(e)}
+    except Exception as e:
+        print(f"Error refreshing prediction markets: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
@@ -704,6 +724,18 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         except Exception as e:
             print(f"ESPN tip times refresh error (non-fatal): {e}")
             results["espn_tip_times"] = {"error": str(e)}
+
+        # 2d. Refresh prediction market data (Polymarket + Kalshi)
+        try:
+            pm_results = refresh_prediction_markets()
+            results["prediction_markets"] = pm_results
+            poly_matched = pm_results.get("polymarket", {}).get("matched", 0)
+            kalshi_matched = pm_results.get("kalshi", {}).get("matched", 0)
+            arb_actionable = pm_results.get("arbitrage", {}).get("actionable", 0)
+            print(f"Prediction Markets: Poly {poly_matched}, Kalshi {kalshi_matched}, Arbitrage {arb_actionable} actionable")
+        except Exception as e:
+            print(f"Prediction market refresh error (non-fatal): {e}")
+            results["prediction_markets"] = {"error": str(e)}
 
         # 3. Run predictions on upcoming games
         prediction_results = run_predictions(force_regenerate=force_regenerate_predictions)

@@ -8,6 +8,10 @@ requests>=2.28.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 brotli>=1.1.0  # For Brotli decompression (Haslametrics uses br encoding)
+httpx>=0.26.0  # Async HTTP client for prediction market APIs
+
+# Cryptography (for Kalshi API signing)
+cryptography>=42.0.0
 
 # NCAA Data
 cbbpy>=2.1.0

@@ -20,6 +20,8 @@ from .supabase_client import (
     get_team_ranking,
     get_team_kenpom,
     get_team_haslametrics,
+    get_game_prediction_markets,
+    get_game_arbitrage_opportunities,
     insert_ai_analysis,
 )
 
@@ -69,6 +71,10 @@ def build_game_context(game_id: str) -> dict:
     if game.get("away_team_id"):
         away_haslametrics = get_team_haslametrics(game["away_team_id"], game["season"])
 
+    # Get prediction market data
+    prediction_markets = get_game_prediction_markets(game_id)
+    arbitrage_opportunities = get_game_arbitrage_opportunities(game_id)
+
     return {
         "game_id": game_id,
         "date": game.get("date"),
@@ -92,6 +98,9 @@ def build_game_context(game_id: str) -> dict:
         # Haslametrics data
         "home_haslametrics": home_haslametrics,
         "away_haslametrics": away_haslametrics,
+        # Prediction market data
+        "prediction_markets": prediction_markets,
+        "arbitrage_opportunities": arbitrage_opportunities,
     }
 
 
@@ -178,6 +187,38 @@ def build_analysis_prompt(context: dict) -> str:
 - Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
 """
 
+    # Build prediction market section if data is available
+    pm_section = ""
+    prediction_markets = context.get("prediction_markets", [])
+    arbitrage = context.get("arbitrage_opportunities", [])
+
+    if prediction_markets or arbitrage:
+        pm_section = "\n## PREDICTION MARKET DATA\n"
+
+        if prediction_markets:
+            for pm in prediction_markets[:3]:  # Limit to 3 markets
+                pm_section += f"\n**{pm.get('source', 'Unknown').title()}**: {pm.get('title', 'N/A')}\n"
+                for outcome in pm.get("outcomes", [])[:4]:
+                    price = outcome.get("price", 0) or 0
+                    pm_section += f"  - {outcome.get('name', 'N/A')}: {price*100:.1f}%\n"
+                if pm.get("volume"):
+                    pm_section += f"  - Volume: ${pm.get('volume', 0):,.0f}\n"
+
+        if arbitrage:
+            pm_section += "\n**Arbitrage Signals:**\n"
+            for arb in arbitrage[:3]:  # Limit to 3 opportunities
+                direction = "higher" if arb.get("edge_direction") == "prediction_higher" else "lower"
+                sbook_prob = arb.get('sportsbook_implied_prob', 0) or 0
+                pm_prob = arb.get('prediction_market_prob', 0) or 0
+                delta = arb.get('delta', 0) or 0
+                pm_section += f"""
+- {arb.get('bet_type', 'N/A').replace('_', ' ').title()}:
+  - Sportsbook implied: {sbook_prob*100:.1f}%
+  - Prediction market: {pm_prob*100:.1f}%
+  - Delta: {delta:.1f}% ({direction} on prediction market)
+  - Actionable: {"YES" if arb.get('is_actionable') else "No"}
+"""
+
     # Build analysis considerations based on available data
     analysis_points = """1. Ranking differential and what it implies about team quality
 2. Home court advantage (if applicable)
@@ -225,7 +266,7 @@ Venue: {context['venue'] or 'TBD'}
 Spread: {spread_str or 'Not available'}
 {ml_str}
 Total: O/U {context['total'] or 'N/A'}
-{kenpom_section}{haslametrics_section}
+{kenpom_section}{haslametrics_section}{pm_section}
 ## CONTEXT
 - Conference Game: {'Yes' if context['is_conference_game'] else 'No'}
 - Same Conference: {'Yes' if context['home_conference'] == context['away_conference'] else 'No'}
@@ -254,6 +295,9 @@ Important guidelines:
 - When KenPom data is available, use efficiency margins to estimate expected point differential
 - When Haslametrics data is available, use All-Play % and momentum to validate your pick
 - If KenPom and Haslametrics disagree significantly, lower your confidence score
+- When prediction market data is available, consider where public money is flowing
+- Large deltas between prediction markets and sportsbooks may signal market inefficiency
+- Actionable arbitrage signals (>=10% delta) warrant serious consideration
 
 Respond with ONLY the JSON object, no additional text."""
 

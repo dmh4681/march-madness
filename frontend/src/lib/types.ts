@@ -263,6 +263,9 @@ export interface TodayGame {
   has_ai_analysis?: boolean;
   has_claude_analysis?: boolean;
   has_grok_analysis?: boolean;
+  // Prediction market indicators
+  has_prediction_data?: boolean;
+  has_arbitrage_signal?: boolean;
 }
 
 export interface SeasonPerformance {
@@ -329,6 +332,48 @@ export interface GameAnalyticsResponse {
   away_kenpom: KenPomRating | null;
   home_haslametrics: HaslametricsRating | null;
   away_haslametrics: HaslametricsRating | null;
+}
+
+// Prediction Market Types
+export interface PredictionMarket {
+  id: string;
+  source: 'polymarket' | 'kalshi';
+  market_id: string;
+  title: string;
+  description?: string;
+  market_type: 'futures' | 'game' | 'prop';
+  outcomes: PredictionOutcome[];
+  game_id?: string;
+  team_id?: string;
+  status: 'open' | 'closed' | 'resolved';
+  volume?: number;
+  liquidity?: number;
+  end_date?: string;
+  captured_at: string;
+}
+
+export interface PredictionOutcome {
+  name: string;
+  price: number;  // 0-1 probability
+  volume?: number;
+}
+
+export interface ArbitrageOpportunity {
+  id: string;
+  game_id: string;
+  prediction_market_id: string;
+  bet_type: string;
+  sportsbook_implied_prob: number;
+  prediction_market_prob: number;
+  delta: number;
+  edge_direction: 'prediction_higher' | 'sportsbook_higher';
+  is_actionable: boolean;
+  captured_at: string;
+  // Joined fields
+  market_source?: string;
+  market_title?: string;
+  home_team?: string;
+  away_team?: string;
 }
 
 // Utility types
