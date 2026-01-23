@@ -68,18 +68,24 @@ class KalshiClient:
 
                 key_data = None
 
-                # First try env var with key content directly
+                # First try KALSHI_PRIVATE_KEY env var
                 if self.private_key_content:
-                    # Handle escaped newlines from env vars
                     key_str = self.private_key_content.replace("\\n", "\n")
                     key_data = key_str.encode()
                     logger.info("Loading Kalshi private key from KALSHI_PRIVATE_KEY env var")
 
-                # Fall back to file path
+                # Then check KALSHI_PRIVATE_KEY_PATH - could be key content OR a file path
                 elif self.private_key_path:
-                    with open(self.private_key_path, "rb") as f:
-                        key_data = f.read()
-                    logger.info(f"Loading Kalshi private key from file: {self.private_key_path}")
+                    # If it looks like PEM key content (starts with -----BEGIN), use it directly
+                    if "BEGIN" in self.private_key_path or "PRIVATE KEY" in self.private_key_path:
+                        key_str = self.private_key_path.replace("\\n", "\n")
+                        key_data = key_str.encode()
+                        logger.info("Loading Kalshi private key from KALSHI_PRIVATE_KEY_PATH (key content)")
+                    else:
+                        # Treat as file path
+                        with open(self.private_key_path, "rb") as f:
+                            key_data = f.read()
+                        logger.info(f"Loading Kalshi private key from file: {self.private_key_path}")
 
                 if key_data:
                     self._private_key = serialization.load_pem_private_key(
