@@ -1200,10 +1200,15 @@ def test_kalshi_endpoint():
 
                     for m in batch:
                         ticker = m.get("ticker", "")
+                        title = m.get("title", "") or ""
                         market_str = str(m)  # Convert entire market to string for searching
-                        # Check if it's NCAAMB (anywhere in market data)
-                        if "NCAAMB" in market_str.upper():
-                            cbb_tickers_found.append(ticker)
+
+                        # Check if it's a standalone NCAAMB market (not a parlay)
+                        if ticker.upper().startswith("KXNCAAMB"):
+                            cbb_tickers_found.append({"ticker": ticker, "title": title, "type": "standalone"})
+                        # Check for NCAAMB in multi-game parlays
+                        elif "NCAAMB" in market_str.upper() and "MULTIGAME" in ticker.upper():
+                            cbb_tickers_found.append({"ticker": ticker[:50], "title": title[:50], "type": "parlay"})
                         elif "NBA" in market_str.upper() and "NCAA" not in market_str.upper():
                             nba_count += 1
 
