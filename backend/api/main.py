@@ -1119,6 +1119,40 @@ def refresh_prediction_markets_endpoint():
         raise HTTPException(status_code=500, detail="Prediction market refresh failed. Please try again later.")
 
 
+@app.get("/prediction-markets")
+def get_prediction_markets():
+    """
+    Get stored prediction market data with team names.
+    """
+    try:
+        from .supabase_client import get_supabase
+        supabase = get_supabase()
+
+        # Get prediction markets with team names
+        result = supabase.table("prediction_markets").select(
+            "source, market_id, title, market_type, status, team_id, game_id"
+        ).eq("status", "open").limit(50).execute()
+
+        markets = result.data or []
+
+        # Get team names for matched markets
+        team_ids = [m["team_id"] for m in markets if m.get("team_id")]
+        if team_ids:
+            teams_result = supabase.table("teams").select("id, name").in_("id", team_ids).execute()
+            team_map = {t["id"]: t["name"] for t in (teams_result.data or [])}
+            for m in markets:
+                if m.get("team_id"):
+                    m["team_name"] = team_map.get(m["team_id"])
+
+        return {
+            "count": len(markets),
+            "markets": markets
+        }
+    except Exception as e:
+        logger.error(f"Failed to get prediction markets: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/test-kalshi")
 def test_kalshi_endpoint():
     """
