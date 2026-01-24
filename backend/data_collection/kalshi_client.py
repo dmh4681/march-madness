@@ -160,64 +160,66 @@ class KalshiClient:
         """
         Fetch NCAA basketball markets from Kalshi.
 
-        Returns markets that match college basketball series prefixes
-        or contain relevant keywords in the title.
+        Uses series_ticker filter to directly fetch CBB game markets.
+        Kalshi organizes markets by series - KXNCAAMBGAME is NCAA Men's Basketball.
         """
         if not self.is_configured:
             logger.warning("Kalshi credentials not configured, skipping")
             return []
 
         markets = []
-        cursor = None
+
+        # Kalshi series tickers for college basketball
+        cbb_series = [
+            "KXNCAAMBGAME",      # NCAA Men's Basketball Games
+            "KXNCAAMBSPREAD",    # NCAA Men's Basketball Spreads
+            "KXNCAAMBTOTAL",     # NCAA Men's Basketball Totals
+            "KXNCAAWBGAME",      # NCAA Women's Basketball Games (if exists)
+        ]
 
         try:
-            while True:
-                path = "/markets"
-                params = {"limit": 100, "status": "open"}
-                if cursor:
-                    params["cursor"] = cursor
+            for series in cbb_series:
+                cursor = None
+                pages = 0
+                max_pages = 10  # Limit pages per series
 
-                headers = self._get_headers("GET", path)
-                response = await self.client.get(path, headers=headers, params=params)
+                while pages < max_pages:
+                    path = "/markets"
+                    params = {
+                        "limit": 100,
+                        "status": "open",
+                        "series_ticker": series
+                    }
+                    if cursor:
+                        params["cursor"] = cursor
 
-                if response.status_code == 401:
-                    logger.error("Kalshi authentication failed - check API key and private key")
-                    break
-                elif response.status_code != 200:
-                    logger.error(f"Kalshi API error: {response.status_code} - {response.text[:200]}")
-                    break
+                    headers = self._get_headers("GET", path)
+                    response = await self.client.get(path, headers=headers, params=params)
 
-                data = response.json()
-                batch = data.get("markets", [])
+                    if response.status_code == 401:
+                        logger.error("Kalshi authentication failed - check API key and private key")
+                        break
+                    elif response.status_code == 429:
+                        logger.warning("Kalshi rate limited, stopping fetch")
+                        break
+                    elif response.status_code != 200:
+                        logger.debug(f"Kalshi series {series} returned {response.status_code}")
+                        break
 
-                # Filter for college basketball
-                for m in batch:
-                    ticker = m.get("ticker", "")
-                    title = (m.get("title", "") or "").lower()
-                    category = (m.get("category", "") or "").lower()
+                    data = response.json()
+                    batch = data.get("markets", [])
 
-                    # Check ticker prefix
-                    is_cbb_ticker = any(
-                        ticker.upper().startswith(prefix)
-                        for prefix in CBB_SERIES_PREFIXES
-                    )
+                    if not batch:
+                        break
 
-                    # Check keywords in title
-                    is_cbb_title = any(x in title for x in [
-                        "ncaa", "college basketball", "march madness",
-                        "final four", "elite eight", "sweet sixteen",
-                        "ncaa tournament", "national championship"
-                    ])
+                    markets.extend(batch)
+                    pages += 1
 
-                    # Check category
-                    is_cbb_category = "basketball" in category or "ncaa" in category
+                    cursor = data.get("cursor")
+                    if not cursor:
+                        break
 
-                    if is_cbb_ticker or is_cbb_title or is_cbb_category:
-                        markets.append(m)
-
-                cursor = data.get("cursor")
-                if not cursor or not batch:
-                    break
+                logger.debug(f"Kalshi series {series}: fetched {pages} pages")
 
             logger.info(f"Kalshi: Found {len(markets)} college basketball markets")
 
