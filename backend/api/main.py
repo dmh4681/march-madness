@@ -1285,7 +1285,13 @@ def test_kalshi_endpoint():
             finally:
                 await client.close()
 
-        fetch_result = asyncio.run(run_test())
+        # Use new event loop to avoid "Event loop is closed" error
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            fetch_result = loop.run_until_complete(run_test())
+        finally:
+            loop.close()
         results.update(fetch_result)
 
         return results
