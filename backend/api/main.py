@@ -1205,7 +1205,7 @@ def debug_pm_match():
 def test_kalshi_endpoint():
     """
     Diagnostic endpoint to test Kalshi API connection.
-    Returns authentication status and market availability summary.
+    Returns authentication status and sample markets to identify CBB ticker formats.
     """
     try:
         import asyncio
@@ -1215,15 +1215,13 @@ def test_kalshi_endpoint():
 
         results = {
             "is_configured": client.is_configured,
-            "has_api_key": bool(client.api_key),
-            "has_private_key": bool(client.private_key_content or client.private_key_path),
+            "private_key_loaded": False,
         }
 
         if not client.is_configured:
-            results["error"] = "Kalshi not configured - need KALSHI_API_KEY and KALSHI_PRIVATE_KEY"
+            results["error"] = "Kalshi not configured"
             return results
 
-        # Test the private key loading
         try:
             pk = client.private_key
             results["private_key_loaded"] = pk is not None
@@ -1232,13 +1230,13 @@ def test_kalshi_endpoint():
             return results
 
         async def test_fetch():
-            # Quick scan of first 500 markets
-            standalone_cbb = 0
-            parlay_cbb = 0
+            # Scan markets and collect unique ticker prefixes + sample CBB-looking markets
+            ticker_prefixes = {}
+            cbb_samples = []
             total = 0
             cursor = None
 
-            for _ in range(5):  # 5 pages
+            for _ in range(10):  # 10 pages = 1000 markets
                 path = "/markets"
                 params = {"limit": 100, "status": "open"}
                 if cursor:
@@ -1247,7 +1245,7 @@ def test_kalshi_endpoint():
 
                 response = await client.client.get(path, headers=headers, params=params)
                 if response.status_code != 200:
-                    return {"api_status": response.status_code, "error": "API request failed"}
+                    return {"api_status": response.status_code, "error": response.text[:200]}
 
                 data = response.json()
                 batch = data.get("markets", [])
@@ -1255,23 +1253,30 @@ def test_kalshi_endpoint():
 
                 for m in batch:
                     ticker = m.get("ticker", "")
-                    market_str = str(m)
+                    title = m.get("title", "") or ""
 
-                    if ticker.upper().startswith("KXNCAAMB"):
-                        standalone_cbb += 1
-                    elif "NCAAMB" in market_str.upper():
-                        parlay_cbb += 1
+                    # Track ticker prefixes (first part before dash or first 10 chars)
+                    prefix = ticker.split("-")[0][:15] if ticker else "UNKNOWN"
+                    ticker_prefixes[prefix] = ticker_prefixes.get(prefix, 0) + 1
+
+                    # Look for CBB-related content in title
+                    title_lower = title.lower()
+                    if any(kw in title_lower for kw in ["ncaa", "college", "vs", "spread", "points"]) and "nfl" not in title_lower and "nba" not in title_lower:
+                        if len(cbb_samples) < 10:
+                            cbb_samples.append({"ticker": ticker, "title": title[:100]})
 
                 cursor = data.get("cursor")
                 if not cursor or not batch:
                     break
 
+            # Sort prefixes by count
+            top_prefixes = sorted(ticker_prefixes.items(), key=lambda x: -x[1])[:20]
+
             return {
                 "api_status": 200,
                 "markets_scanned": total,
-                "standalone_cbb_markets": standalone_cbb,
-                "parlay_cbb_references": parlay_cbb,
-                "note": "Kalshi currently has NCAAMB only in multi-game parlays, not standalone markets"
+                "top_ticker_prefixes": top_prefixes,
+                "cbb_samples": cbb_samples,
             }
 
         fetch_result = asyncio.run(test_fetch())
