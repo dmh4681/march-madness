@@ -1279,9 +1279,14 @@ def test_kalshi_endpoint():
                 "cbb_samples": cbb_samples,
             }
 
-        fetch_result = asyncio.run(test_fetch())
+        async def run_test():
+            try:
+                return await test_fetch()
+            finally:
+                await client.close()
+
+        fetch_result = asyncio.run(run_test())
         results.update(fetch_result)
-        asyncio.run(client.close())
 
         return results
 
