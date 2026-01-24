@@ -1230,53 +1230,55 @@ def test_kalshi_endpoint():
             return results
 
         async def test_fetch():
-            # Scan markets and collect unique ticker prefixes + sample CBB-looking markets
-            ticker_prefixes = {}
-            cbb_samples = []
-            total = 0
-            cursor = None
+            # Try fetching NCAAMBGAME markets directly by series
+            cbb_markets = []
 
-            for _ in range(10):  # 10 pages = 1000 markets
-                path = "/markets"
-                params = {"limit": 100, "status": "open"}
-                if cursor:
-                    params["cursor"] = cursor
-                headers = client._get_headers("GET", path)
+            # Method 1: Try series_ticker filter
+            path = "/markets"
+            params = {"limit": 100, "status": "open", "series_ticker": "KXNCAAMBGAME"}
+            headers = client._get_headers("GET", path)
 
-                response = await client.client.get(path, headers=headers, params=params)
-                if response.status_code != 200:
-                    return {"api_status": response.status_code, "error": response.text[:200]}
-
+            response = await client.client.get(path, headers=headers, params=params)
+            method1_status = response.status_code
+            method1_count = 0
+            if response.status_code == 200:
                 data = response.json()
                 batch = data.get("markets", [])
-                total += len(batch)
+                method1_count = len(batch)
+                for m in batch[:5]:
+                    cbb_markets.append({"ticker": m.get("ticker"), "title": m.get("title", "")[:80]})
 
-                for m in batch:
-                    ticker = m.get("ticker", "")
-                    title = m.get("title", "") or ""
+            # Method 2: Try event_ticker filter
+            params2 = {"limit": 100, "status": "open", "event_ticker": "KXNCAAMBGAME"}
+            response2 = await client.client.get(path, headers=headers, params=params2)
+            method2_status = response2.status_code
+            method2_count = 0
+            if response2.status_code == 200:
+                data2 = response2.json()
+                batch2 = data2.get("markets", [])
+                method2_count = len(batch2)
+                for m in batch2[:5]:
+                    if m.get("ticker") not in [x["ticker"] for x in cbb_markets]:
+                        cbb_markets.append({"ticker": m.get("ticker"), "title": m.get("title", "")[:80]})
 
-                    # Track ticker prefixes (first part before dash or first 10 chars)
-                    prefix = ticker.split("-")[0][:15] if ticker else "UNKNOWN"
-                    ticker_prefixes[prefix] = ticker_prefixes.get(prefix, 0) + 1
-
-                    # Look for CBB-related content in title
-                    title_lower = title.lower()
-                    if any(kw in title_lower for kw in ["ncaa", "college", "vs", "spread", "points"]) and "nfl" not in title_lower and "nba" not in title_lower:
-                        if len(cbb_samples) < 10:
-                            cbb_samples.append({"ticker": ticker, "title": title[:100]})
-
-                cursor = data.get("cursor")
-                if not cursor or not batch:
-                    break
-
-            # Sort prefixes by count
-            top_prefixes = sorted(ticker_prefixes.items(), key=lambda x: -x[1])[:20]
+            # Method 3: Search for Georgetown specifically
+            params3 = {"limit": 100, "status": "open"}
+            response3 = await client.client.get(path, headers=headers, params=params3)
+            georgetown_found = []
+            if response3.status_code == 200:
+                data3 = response3.json()
+                for m in data3.get("markets", []):
+                    ticker = m.get("ticker", "").upper()
+                    if "GTWN" in ticker or "GEORGETOWN" in ticker.upper() or "KXNCAAMB" in ticker:
+                        georgetown_found.append({"ticker": m.get("ticker"), "title": m.get("title", "")[:80]})
 
             return {
                 "api_status": 200,
-                "markets_scanned": total,
-                "top_ticker_prefixes": top_prefixes,
-                "cbb_samples": cbb_samples,
+                "method1_series_ticker": {"status": method1_status, "count": method1_count},
+                "method2_event_ticker": {"status": method2_status, "count": method2_count},
+                "method3_search_first_page": {"georgetown_matches": len(georgetown_found)},
+                "cbb_markets_found": cbb_markets[:10],
+                "georgetown_markets": georgetown_found[:5],
             }
 
         async def run_test():
