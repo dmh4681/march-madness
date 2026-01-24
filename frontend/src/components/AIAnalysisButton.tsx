@@ -100,7 +100,7 @@ export function AIAnalysisButton({
   gameId,
   hasClaudeAnalysis = false,
   hasGrokAnalysis = false,
-  apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://web-production-e5efb.up.railway.app',
+  apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
 }: AIAnalysisButtonProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ErrorState | null>(null);

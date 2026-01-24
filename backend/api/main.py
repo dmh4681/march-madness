@@ -102,6 +102,7 @@ from .supabase_client import (
     get_season_performance,
     calculate_season_stats,
     get_current_rankings,
+    get_team_ranking,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
 
@@ -822,13 +823,45 @@ def get_game(request: Request, game_id: GameIdPath):
     prediction = get_latest_prediction(game_id)
     analyses = get_ai_analyses(game_id)
 
+    # Fetch team rankings
+    home_rank = None
+    away_rank = None
+    try:
+        home_team = game.get("home_team", {})
+        away_team = game.get("away_team", {})
+        home_team_id = home_team.get("id")
+        away_team_id = away_team.get("id")
+
+        # Get current season (use game date's year, or current year)
+        game_date = game.get("date")
+        if game_date:
+            try:
+                season = datetime.fromisoformat(game_date.replace("Z", "+00:00")).year
+            except (ValueError, AttributeError):
+                season = datetime.now().year
+        else:
+            season = datetime.now().year
+
+        if home_team_id:
+            home_ranking = get_team_ranking(home_team_id, season)
+            if home_ranking:
+                home_rank = home_ranking.get("rank")
+
+        if away_team_id:
+            away_ranking = get_team_ranking(away_team_id, season)
+            if away_ranking:
+                away_rank = away_ranking.get("rank")
+    except Exception as e:
+        # SECURITY: Log error server-side, continue without rankings
+        logger.warning(f"Error fetching rankings for game {game_id}: {e}")
+
     return GameResponse(
         id=game_id,
         date=game.get("date"),
         home_team=game.get("home_team", {}).get("name", "Unknown"),
         away_team=game.get("away_team", {}).get("name", "Unknown"),
-        home_rank=None,  # TODO: get from rankings
-        away_rank=None,
+        home_rank=home_rank,
+        away_rank=away_rank,
         home_spread=spread.get("home_spread") if spread else None,
         is_conference_game=game.get("is_conference_game", False),
         prediction=prediction,

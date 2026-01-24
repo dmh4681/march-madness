@@ -109,6 +109,68 @@ def _sanitize_error_message(error_msg: str) -> str:
     return sanitized
 
 
+def _extract_json_from_response(response_text: str) -> dict:
+    """
+    Extract JSON from AI response text, handling nested braces.
+
+    Tries multiple strategies:
+    1. Direct JSON parse
+    2. Find JSON block markers (```json ... ```)
+    3. Find outermost { } with brace counting
+    4. Fallback to default values
+
+    Args:
+        response_text: Raw text response from AI
+
+    Returns:
+        Parsed JSON dict or default fallback values
+    """
+    # Strategy 1: Try direct parse
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Look for ```json code blocks
+    json_block_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+    if json_block_match:
+        try:
+            return json.loads(json_block_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Strategy 3: Find outermost JSON object using brace counting
+    # This handles nested braces like {"key_factors": ["a", "b"]}
+    start_idx = response_text.find('{')
+    if start_idx != -1:
+        brace_count = 0
+        end_idx = start_idx
+
+        for i, char in enumerate(response_text[start_idx:], start=start_idx):
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_idx = i
+                    break
+
+        if brace_count == 0:
+            json_str = response_text[start_idx:end_idx + 1]
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError:
+                pass
+
+    # Strategy 4: Fallback
+    return {
+        "recommended_bet": "pass",
+        "confidence_score": 0.5,
+        "key_factors": ["Unable to parse AI response"],
+        "reasoning": response_text[:500] if response_text else "No response",
+    }
+
+
 def build_game_context(game_id: str) -> dict:
     """Build context object for AI analysis."""
     game = get_game_by_id(game_id)
@@ -394,22 +456,8 @@ def analyze_with_claude(context: dict) -> dict:
     response_text = response.content[0].text
     tokens_used = response.usage.input_tokens + response.usage.output_tokens
 
-    try:
-        # Try to extract JSON from response
-        analysis = json.loads(response_text)
-    except json.JSONDecodeError:
-        # If response isn't pure JSON, try to extract it
-        import re
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            analysis = json.loads(json_match.group())
-        else:
-            analysis = {
-                "recommended_bet": "pass",
-                "confidence_score": 0.5,
-                "key_factors": ["Unable to parse AI response"],
-                "reasoning": response_text[:500],
-            }
+    # Extract JSON using robust parser that handles nested braces
+    analysis = _extract_json_from_response(response_text)
 
     return {
         "ai_provider": "claude",
@@ -444,20 +492,8 @@ def analyze_with_grok(context: dict) -> dict:
     response_text = response.choices[0].message.content
     tokens_used = response.usage.total_tokens if response.usage else 0
 
-    try:
-        analysis = json.loads(response_text)
-    except json.JSONDecodeError:
-        import re
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            analysis = json.loads(json_match.group())
-        else:
-            analysis = {
-                "recommended_bet": "pass",
-                "confidence_score": 0.5,
-                "key_factors": ["Unable to parse AI response"],
-                "reasoning": response_text[:500],
-            }
+    # Extract JSON using robust parser that handles nested braces
+    analysis = _extract_json_from_response(response_text)
 
     return {
         "ai_provider": "grok",
