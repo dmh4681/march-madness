@@ -695,13 +695,24 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
     }
 
     try:
-        # 1. Fetch current spreads from The Odds API
+        # 1. ESPN is PRIMARY source of games - creates all games first
+        try:
+            print("\n=== Step 1: ESPN Game Schedule (PRIMARY) ===")
+            espn_results = refresh_espn_tip_times(days=7)
+            results["espn_games"] = espn_results
+            print(f"ESPN: Created {espn_results.get('games_created', 0)}, updated {espn_results.get('games_updated', 0)}")
+        except Exception as e:
+            print(f"ESPN refresh error (non-fatal): {e}")
+            results["espn_games"] = {"error": str(e)}
+
+        # 2. Fetch betting lines from The Odds API (adds to existing games)
+        print("\n=== Step 2: Betting Lines from Odds API ===")
         odds_data = fetch_odds_api_spreads()
         if odds_data:
             odds_results = process_odds_data(odds_data)
             results["odds"] = odds_results
 
-        # 2. Refresh KenPom advanced analytics (once daily)
+        # 3. Refresh KenPom advanced analytics (once daily)
         try:
             kenpom_results = refresh_kenpom_data()
             results["kenpom"] = kenpom_results
@@ -709,33 +720,13 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
             print(f"KenPom refresh error (non-fatal): {e}")
             results["kenpom"] = {"error": str(e)}
 
-        # 2b. Refresh Haslametrics advanced analytics (FREE - no credentials needed)
+        # 3b. Refresh Haslametrics advanced analytics (FREE - no credentials needed)
         try:
             hasla_results = refresh_haslametrics_data()
             results["haslametrics"] = hasla_results
         except Exception as e:
             print(f"Haslametrics refresh error (non-fatal): {e}")
             results["haslametrics"] = {"error": str(e)}
-
-        # 2c. Update game tip times from ESPN (FREE - public API)
-        try:
-            espn_results = refresh_espn_tip_times(days=7)
-            results["espn_tip_times"] = espn_results
-        except Exception as e:
-            print(f"ESPN tip times refresh error (non-fatal): {e}")
-            results["espn_tip_times"] = {"error": str(e)}
-
-        # 2d. Refresh prediction market data (Polymarket + Kalshi)
-        try:
-            pm_results = refresh_prediction_markets()
-            results["prediction_markets"] = pm_results
-            poly_matched = pm_results.get("polymarket", {}).get("matched", 0)
-            kalshi_matched = pm_results.get("kalshi", {}).get("matched", 0)
-            arb_actionable = pm_results.get("arbitrage", {}).get("actionable", 0)
-            print(f"Prediction Markets: Poly {poly_matched}, Kalshi {kalshi_matched}, Arbitrage {arb_actionable} actionable")
-        except Exception as e:
-            print(f"Prediction market refresh error (non-fatal): {e}")
-            results["prediction_markets"] = {"error": str(e)}
 
         # 3. Run predictions on upcoming games
         prediction_results = run_predictions(force_regenerate=force_regenerate_predictions)

@@ -228,9 +228,137 @@ def fetch_espn_schedule(target_date: date) -> list[dict]:
         return []
 
 
+def get_team_id_by_normalized_name(client, normalized_name: str) -> Optional[str]:
+    """
+    Find a team ID by normalized name, with fuzzy matching.
+    """
+    if not normalized_name:
+        return None
+
+    # Try exact match first
+    result = client.table("teams").select("id").eq("normalized_name", normalized_name).execute()
+    if result.data:
+        return result.data[0]["id"]
+
+    # Try partial match (first word)
+    first_word = normalized_name.split("-")[0]
+    if first_word and len(first_word) > 2:
+        result = client.table("teams").select("id, normalized_name").ilike(
+            "normalized_name", f"{first_word}%"
+        ).execute()
+        if result.data:
+            # Return the best match
+            for team in result.data:
+                if normalized_name in team["normalized_name"] or team["normalized_name"] in normalized_name:
+                    return team["id"]
+            # Just return first match if no better option
+            return result.data[0]["id"]
+
+    return None
+
+
+def create_games_from_espn(days: int = 7) -> dict:
+    """
+    Create games in our database from ESPN data.
+
+    This is the PRIMARY source of games. ESPN has all D1 games.
+    The Odds API only has games with betting lines, so we use ESPN first.
+
+    Args:
+        days: Number of days ahead to fetch (default 7)
+
+    Returns:
+        dict with counts of games created, updated, etc.
+    """
+    from backend.api.supabase_client import get_supabase
+
+    client = get_supabase()
+    today = datetime.now(EASTERN_TZ).date()
+
+    results = {
+        "dates_processed": 0,
+        "games_created": 0,
+        "games_updated": 0,
+        "teams_not_found": 0,
+        "errors": 0,
+    }
+
+    # Process each day
+    for day_offset in range(days):
+        target_date = today + timedelta(days=day_offset)
+        results["dates_processed"] += 1
+
+        # Fetch ESPN data for this date
+        espn_games = fetch_espn_schedule(target_date)
+        logger.info(f"ESPN returned {len(espn_games)} games for {target_date}")
+
+        if not espn_games:
+            continue
+
+        for espn_game in espn_games:
+            try:
+                # Look up team IDs
+                home_team_id = get_team_id_by_normalized_name(client, espn_game["home_team"])
+                away_team_id = get_team_id_by_normalized_name(client, espn_game["away_team"])
+
+                if not home_team_id or not away_team_id:
+                    results["teams_not_found"] += 1
+                    logger.debug(f"Team not found: {espn_game['away_team']} @ {espn_game['home_team']}")
+                    continue
+
+                # Convert tip_time to Eastern date for game date
+                tip_time_utc = espn_game["tip_time"]
+                tip_time_eastern = tip_time_utc.astimezone(EASTERN_TZ)
+                game_date = tip_time_eastern.date().isoformat()
+
+                # Check if game already exists
+                existing = client.table("games").select("id, tip_time").eq(
+                    "home_team_id", home_team_id
+                ).eq(
+                    "away_team_id", away_team_id
+                ).eq(
+                    "date", game_date
+                ).execute()
+
+                if existing.data:
+                    # Update tip time if needed
+                    game_id = existing.data[0]["id"]
+                    existing_tip = existing.data[0].get("tip_time")
+
+                    # Always update tip_time from ESPN (it's authoritative)
+                    client.table("games").update({
+                        "tip_time": tip_time_utc.isoformat(),
+                        "external_id": f"espn-{espn_game['espn_id']}",
+                    }).eq("id", game_id).execute()
+                    results["games_updated"] += 1
+                else:
+                    # Create new game
+                    new_game = {
+                        "external_id": f"espn-{espn_game['espn_id']}",
+                        "date": game_date,
+                        "tip_time": tip_time_utc.isoformat(),
+                        "season": 2025,
+                        "home_team_id": home_team_id,
+                        "away_team_id": away_team_id,
+                        "is_conference_game": False,  # Could determine from team conferences
+                        "status": "scheduled",
+                    }
+                    client.table("games").insert(new_game).execute()
+                    results["games_created"] += 1
+                    logger.debug(f"Created game: {espn_game['away_team']} @ {espn_game['home_team']}")
+
+            except Exception as e:
+                logger.error(f"Error processing ESPN game: {e}")
+                results["errors"] += 1
+
+    logger.info(f"ESPN game sync complete: {results}")
+    return results
+
+
 def update_game_tip_times(days: int = 7) -> dict:
     """
     Update tip times in our database from ESPN data.
+    (Legacy function - now prefer create_games_from_espn)
 
     Args:
         days: Number of days ahead to fetch (default 7)
@@ -343,22 +471,30 @@ def update_game_tip_times(days: int = 7) -> dict:
     return results
 
 
+def refresh_espn_games(days: int = 7) -> dict:
+    """
+    Main entry point for syncing games from ESPN.
+
+    This creates new games and updates tip times for existing games.
+    ESPN is the PRIMARY source of game schedules.
+    """
+    logger.info(f"=== Syncing Games from ESPN (next {days} days) ===")
+
+    results = create_games_from_espn(days=days)
+
+    logger.info(f"Created {results['games_created']} games, updated {results['games_updated']}")
+    return results
+
+
 def refresh_espn_tip_times(days: int = 7) -> dict:
     """
-    Main entry point for refreshing tip times from ESPN.
-
-    This is a lightweight operation that can run frequently.
+    Legacy entry point - now calls refresh_espn_games.
     """
-    logger.info(f"=== Refreshing ESPN Tip Times (next {days} days) ===")
-
-    results = update_game_tip_times(days=days)
-
-    logger.info(f"Updated {results['games_updated']} games with real tip times")
-    return results
+    return refresh_espn_games(days=days)
 
 
 if __name__ == "__main__":
     import json
-    results = refresh_espn_tip_times()
+    results = refresh_espn_games()
     print("\nResults:")
     print(json.dumps(results, indent=2))

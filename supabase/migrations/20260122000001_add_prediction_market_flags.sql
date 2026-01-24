@@ -8,7 +8,7 @@ CREATE OR REPLACE VIEW today_games AS
 SELECT
     g.id,
     g.date,
-    g.date as tip_time,
+    g.tip_time,
     g.season,
     g.is_conference_game,
     g.home_score,
@@ -157,7 +157,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) grok ON true
 WHERE g.date = CURRENT_DATE
-ORDER BY g.date, ht.name;
+ORDER BY g.tip_time NULLS LAST, ht.name;
 
 
 -- Drop and recreate upcoming_games view
@@ -167,7 +167,7 @@ CREATE OR REPLACE VIEW upcoming_games AS
 SELECT
     g.id,
     g.date,
-    g.date as tip_time,
+    g.tip_time,
     g.season,
     g.is_conference_game,
     g.home_score,
@@ -312,7 +312,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) grok ON true
 WHERE g.date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-ORDER BY g.date, ht.name;
+ORDER BY g.date, g.tip_time NULLS LAST, ht.name;
 
 
 -- Grant access

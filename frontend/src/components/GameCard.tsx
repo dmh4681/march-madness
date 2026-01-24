@@ -66,10 +66,16 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
   const hasRealTipTime = game.tip_time &&
     game.tip_time !== game.date &&
     game.tip_time.includes('T') &&
-    !game.tip_time.endsWith('T00:00:00');
+    !game.tip_time.endsWith('T00:00:00') &&
+    !game.tip_time.endsWith('T00:00:00Z');
 
+  // Format tip time in Eastern timezone (US college basketball standard)
   const tipTime = hasRealTipTime
-    ? format(new Date(game.tip_time!), 'h:mm a')
+    ? new Date(game.tip_time!).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/New_York',
+      }) + ' ET'
     : 'TBD';
 
   const isRankedMatchup = game.home_rank || game.away_rank;

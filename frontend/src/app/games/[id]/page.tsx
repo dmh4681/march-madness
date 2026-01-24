@@ -198,8 +198,14 @@ export default async function GameDetailPage({ params }: PageProps) {
     notFound();
   }
 
-  const tipTime = game.tip_time
-    ? format(new Date(game.tip_time), 'h:mm a')
+  // Check for real tip time (not midnight placeholder)
+  const hasRealTipTime = game.tip_time && !game.tip_time.endsWith('T00:00:00Z');
+  const tipTime = hasRealTipTime
+    ? new Date(game.tip_time!).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZone: 'America/New_York',
+      }) + ' ET'
     : 'TBD';
   const gameDate = format(new Date(game.date), 'EEEE, MMMM d, yyyy');
 
