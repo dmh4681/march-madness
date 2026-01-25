@@ -248,12 +248,97 @@ def validate_edge(df: pd.DataFrame, use_spread: bool = False) -> dict:
 
     Tests if unranked conference underdogs perform better than expected.
 
+    Statistical Framework
+    =====================
+
+    This function implements hypothesis testing to determine if there's
+    a statistically significant betting edge.
+
+    **Null Hypothesis (H₀):**
+        The underdog cover rate equals 50% (fair market)
+        P(cover) = 0.50
+
+    **Alternative Hypothesis (H₁):**
+        The underdog cover rate exceeds 50%
+        P(cover) > 0.50
+
+    This is a one-sided test because we're specifically testing for
+    a positive edge on underdogs, not just any difference from 50%.
+
+    Binomial Test
+    =============
+
+    We use the binomial test because:
+    1. Each game is a Bernoulli trial (cover or don't cover)
+    2. Outcomes are independent (one game doesn't affect another)
+    3. Probability of success is constant (under null hypothesis)
+
+    The test statistic is the observed number of covers (k) out of n games.
+
+    **P-value Calculation:**
+        p-value = P(K ≥ k | H₀) = Σᵢ₌ₖⁿ C(n,i) × 0.5ⁿ
+
+    where:
+    - k = observed number of covers
+    - n = total number of games
+    - C(n,i) = binomial coefficient "n choose i"
+
+    **Interpreting P-values:**
+    - p < 0.05: Strong evidence against H₀ (statistically significant)
+    - p < 0.01: Very strong evidence
+    - p ≥ 0.05: Insufficient evidence to reject H₀
+
+    Confidence Intervals
+    ====================
+
+    We use the Wilson score interval (not normal approximation) because:
+    1. Valid for all sample sizes
+    2. Never produces impossible intervals (< 0% or > 100%)
+    3. More accurate when p is near 0 or 1
+
+    The 95% CI tells us: we're 95% confident the true cover rate
+    falls within this range.
+
+    **For betting profitability:**
+    - If CI lower bound > 52.4%: Strong evidence of profitable edge
+    - If CI contains 52.4%: Edge possible but uncertain
+    - If CI upper bound < 52.4%: No profitable edge exists
+
+    Practical Significance
+    ======================
+
+    Statistical significance ≠ practical significance
+
+    We require BOTH:
+    1. **Statistical**: p-value < 0.05
+    2. **Practical**: win rate > 52.4% (breakeven at -110 odds)
+
+    A 51% win rate might be statistically significant with large n,
+    but it's not practically useful because it's below breakeven.
+
+    Sample Size Considerations
+    ==========================
+
+    The test's power (ability to detect a true edge) depends on sample size:
+
+    - n = 100: Can detect ~7% edge with 80% power
+    - n = 500: Can detect ~3% edge with 80% power
+    - n = 1000: Can detect ~2% edge with 80% power
+
+    Recommendation: At least 300-500 games for reliable results.
+
     Args:
         df: Games DataFrame (already filtered to target games)
         use_spread: Whether to use spread data (if available)
 
     Returns:
-        Dict with validation results
+        Dict with validation results:
+        - sample_size: Number of games tested
+        - wins/losses/pushes: Game outcomes
+        - win_percentage: Observed cover rate
+        - p_value: Statistical significance
+        - ci_95_low/high: 95% confidence interval
+        - edge_exists: Boolean (win% > breakeven AND p < 0.05)
     """
     results = []
 

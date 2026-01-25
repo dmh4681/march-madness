@@ -1,8 +1,101 @@
 'use client';
 
+/**
+ * AIAnalysis Components
+ * =====================
+ *
+ * Components for displaying AI-generated betting analysis from Claude and Grok.
+ * This module provides both single-provider and comparison views.
+ *
+ * AI Providers
+ * ============
+ *
+ * **Claude (Anthropic)**
+ * - Model: Claude Sonnet 4
+ * - Strengths: Thorough analysis, nuanced reasoning, careful consideration
+ * - Best for: Detailed breakdowns, understanding complex situations
+ *
+ * **Grok (xAI)**
+ * - Model: Grok-3
+ * - Strengths: Quick insights, alternative perspectives
+ * - Best for: Cross-validation, catching factors Claude might emphasize differently
+ *
+ * Analysis Components
+ * ===================
+ *
+ * The AI receives comprehensive data about each game:
+ *
+ * 1. **Basic Info**: Teams, rankings, date, venue, conference
+ * 2. **Betting Lines**: Current spread, moneylines, total
+ * 3. **KenPom Data** (when available):
+ *    - AdjEM: Adjusted Efficiency Margin
+ *    - AdjO/AdjD: Adjusted offense and defense
+ *    - Tempo: Pace of play
+ *    - Luck: Deviation from expected performance
+ *    - SOS: Strength of schedule
+ * 4. **Haslametrics Data** (when available):
+ *    - All-Play %: Win probability vs average team
+ *    - Momentum: Recent trend direction
+ *    - Quadrant records: Performance vs NET tiers
+ * 5. **Prediction Markets** (when available):
+ *    - Polymarket/Kalshi prices
+ *    - Arbitrage signals
+ *
+ * Analysis Output
+ * ===============
+ *
+ * Each AI analysis includes:
+ *
+ * - **recommended_bet**: The specific bet recommendation
+ *   - home_spread / away_spread: Spread bet
+ *   - home_ml / away_ml: Moneyline bet
+ *   - over / under: Totals bet
+ *   - pass: No bet recommended
+ *
+ * - **confidence_score**: 0.0 to 1.0 scale
+ *   - 0.8+: High conviction
+ *   - 0.6-0.8: Moderate conviction
+ *   - 0.5-0.6: Low conviction
+ *   - <0.5: Very uncertain
+ *
+ * - **key_factors**: List of 3-5 primary reasons for the recommendation
+ *
+ * - **reasoning**: 2-3 sentence explanation of the recommendation
+ *
+ * Consensus Logic
+ * ===============
+ *
+ * When both AI providers analyze a game, consensus is determined:
+ *
+ * | Claude      | Grok        | Result                           |
+ * |-------------|-------------|----------------------------------|
+ * | Same bet    | Same bet    | Strong consensus - higher confidence |
+ * | Both pass   | Both pass   | No edge detected                 |
+ * | Different   | Different   | Split decision - use caution     |
+ *
+ * Average confidence is used for consensus plays.
+ *
+ * @example
+ * ```tsx
+ * // Full panel with provider tabs
+ * <AIAnalysisPanel
+ *   analyses={[claudeAnalysis, grokAnalysis]}
+ *   onRequestAnalysis={handleRequest}
+ * />
+ *
+ * // Single provider card
+ * <SingleAnalysisCard
+ *   analysis={claudeAnalysis}
+ *   provider="claude"
+ *   onRequest={handleRequest}
+ * />
+ * ```
+ */
+
 import { useState } from 'react';
 import type { AIAnalysis, AIProvider } from '@/lib/types';
 import { AIAnalysisSkeleton, AICompareViewSkeleton } from './ui/skeleton';
+import { InfoTooltip } from './Tooltip';
 
 type ViewMode = AIProvider | 'compare';
 
@@ -122,13 +215,25 @@ export function AIAnalysisPanel({
   );
 }
 
+/**
+ * CompareView Component
+ * =====================
+ *
+ * Displays side-by-side comparison of Claude and Grok analyses.
+ * Highlights consensus or disagreement between the two AI providers.
+ *
+ * Consensus Interpretation:
+ * - Both agree on bet: Higher conviction, consider larger position
+ * - Both pass: Strong signal that no edge exists
+ * - Split decision: Exercise caution, investigate why they differ
+ */
 function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis }) {
   const agreesOnBet = claude.recommended_bet === grok.recommended_bet;
   const avgConfidence = ((claude.confidence_score || 0) + (grok.confidence_score || 0)) / 2;
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Consensus Banner - responsive layout */}
+      {/* Consensus Banner - responsive layout with tooltip */}
       <div className={`p-3 sm:p-4 rounded-lg border ${
         agreesOnBet && claude.recommended_bet !== 'pass'
           ? 'bg-green-500/10 border-green-500/30'
@@ -141,7 +246,7 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
             {agreesOnBet && claude.recommended_bet !== 'pass' ? '🎯' : agreesOnBet ? '⏸️' : '⚖️'}
           </div>
           <div className="flex-1 min-w-0">
-            <div className={`text-xs sm:text-sm font-medium ${
+            <div className={`text-xs sm:text-sm font-medium flex items-center gap-1 ${
               agreesOnBet && claude.recommended_bet !== 'pass'
                 ? 'text-green-400'
                 : agreesOnBet
@@ -149,6 +254,18 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
                 : 'text-yellow-400'
             }`}>
               {agreesOnBet ? 'AI Consensus' : 'Split Decision'}
+              <InfoTooltip
+                content={
+                  agreesOnBet && claude.recommended_bet !== 'pass'
+                    ? 'Both AI models agree on this bet. Higher confidence when providers align.'
+                    : agreesOnBet
+                    ? 'Both models see no clear edge. Consider skipping this game.'
+                    : 'Models disagree. Review each analysis carefully before betting.'
+                }
+                helpLink="/help#ai-analysis"
+                position="right"
+                size="sm"
+              />
             </div>
             <div className="text-white font-semibold text-sm sm:text-base truncate">
               {agreesOnBet
@@ -160,8 +277,13 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
           </div>
           {agreesOnBet && claude.recommended_bet !== 'pass' && (
             <div className="text-right shrink-0">
-              <div className="text-xl sm:text-2xl font-bold text-green-400">
+              <div className="text-xl sm:text-2xl font-bold text-green-400 flex items-center gap-1">
                 {(avgConfidence * 100).toFixed(0)}%
+                <InfoTooltip
+                  content="Average of both AI confidence scores. Higher = stronger conviction."
+                  position="left"
+                  size="sm"
+                />
               </div>
               <div className="text-xs text-gray-400 hidden sm:block">avg confidence</div>
             </div>
@@ -261,16 +383,32 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
   );
 }
 
+/**
+ * AnalysisContent Component
+ * =========================
+ *
+ * Displays the content of a single AI analysis, including:
+ * - Recommended bet with confidence score
+ * - Key factors driving the recommendation
+ * - Detailed reasoning
+ * - Option to view full AI response
+ * - Metadata (timestamp, tokens used)
+ */
 function AnalysisContent({ analysis }: { analysis: AIAnalysis }) {
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* Recommendation - responsive layout */}
+      {/* Recommendation - responsive layout with confidence tooltip */}
       {analysis.recommended_bet && analysis.recommended_bet !== 'pass' && (
         <div className="flex items-center gap-2 sm:gap-3 p-3 sm:p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
           <div className="text-xl sm:text-2xl shrink-0">💰</div>
           <div className="flex-1 min-w-0">
-            <div className="text-xs sm:text-sm text-green-400 font-medium">
+            <div className="text-xs sm:text-sm text-green-400 font-medium flex items-center gap-1">
               Recommended Bet
+              <InfoTooltip
+                content="The AI's specific betting recommendation based on all available data."
+                position="right"
+                size="sm"
+              />
             </div>
             <div className="text-white font-semibold text-sm sm:text-base truncate">
               {formatBetRecommendation(analysis.recommended_bet)}
@@ -278,8 +416,13 @@ function AnalysisContent({ analysis }: { analysis: AIAnalysis }) {
           </div>
           {analysis.confidence_score && (
             <div className="text-right shrink-0">
-              <div className="text-xl sm:text-2xl font-bold text-green-400">
+              <div className="text-xl sm:text-2xl font-bold text-green-400 flex items-center gap-1">
                 {(analysis.confidence_score * 100).toFixed(0)}%
+                <InfoTooltip
+                  content="AI confidence: 80%+ = high conviction, 60-80% = moderate, <60% = lower certainty"
+                  position="left"
+                  size="sm"
+                />
               </div>
               <div className="text-xs text-gray-400 hidden sm:block">confidence</div>
             </div>

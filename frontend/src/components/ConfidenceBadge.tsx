@@ -1,5 +1,87 @@
 'use client';
 
+/**
+ * ConfidenceBadge Component
+ * =========================
+ *
+ * Displays a visual indicator of betting confidence based on model predictions.
+ * The badge communicates both the confidence level and the underlying edge
+ * calculation to help users make informed betting decisions.
+ *
+ * Confidence Tier Calculation
+ * ===========================
+ *
+ * Confidence tiers are derived from the model's predicted cover probability
+ * and the implied edge over fair market odds.
+ *
+ * **Edge Formula:**
+ *   edge = |P(cover) - 0.50| × 100%
+ *
+ * This represents how far our prediction deviates from a coin flip (50%).
+ *
+ * **Tier Assignment:**
+ *
+ * | Tier   | Edge Range | P(cover) Range | Interpretation                    |
+ * |--------|------------|----------------|-----------------------------------|
+ * | HIGH   | > 4%       | > 54% or < 46% | Strong conviction, clear value    |
+ * | MEDIUM | 2-4%       | 52-54%         | Moderate edge, standard bet size  |
+ * | LOW    | < 2%       | 50-52%         | Marginal edge, proceed cautiously |
+ * | PASS   | n/a        | ~50%           | No edge detected, skip this game  |
+ *
+ * ROI Implications
+ * ================
+ *
+ * At standard -110 odds, breakeven win rate is 52.4%.
+ *
+ * **Expected ROI by Tier (theoretical):**
+ *
+ * | Tier   | Win Rate | Expected ROI |
+ * |--------|----------|--------------|
+ * | HIGH   | ~55-60%  | +5% to +14%  |
+ * | MEDIUM | ~53-55%  | +1% to +5%   |
+ * | LOW    | ~51-53%  | -3% to +1%   |
+ * | PASS   | ~50%     | -4.5%        |
+ *
+ * Note: These are expected long-term returns assuming proper bankroll
+ * management. Short-term variance can be significant.
+ *
+ * Bet Sizing Recommendations
+ * ==========================
+ *
+ * Using Kelly Criterion-inspired sizing:
+ *
+ * | Tier   | Suggested Unit Size | Example ($100 unit) |
+ * |--------|---------------------|---------------------|
+ * | HIGH   | 1.5-2 units         | $150-$200           |
+ * | MEDIUM | 1 unit              | $100                |
+ * | LOW    | 0.5 units           | $50                 |
+ * | PASS   | 0 units             | $0 (no bet)         |
+ *
+ * Accessibility Features
+ * ======================
+ *
+ * - WCAG AA color contrast compliance (minimum 4.5:1 ratio)
+ * - ARIA labels for screen reader support
+ * - Color-blind friendly patterns (optional)
+ * - High contrast mode classes for OS-level settings
+ * - Touch-friendly sizing on mobile (44px minimum)
+ *
+ * @example
+ * ```tsx
+ * // Basic usage
+ * <ConfidenceBadge tier="high" />
+ *
+ * // Without label (icon only)
+ * <ConfidenceBadge tier="medium" showLabel={false} />
+ *
+ * // Touch-friendly size for mobile
+ * <ConfidenceBadge tier="low" size="touch" />
+ *
+ * // With accessibility ID
+ * <ConfidenceBadge tier="high" id="game-123-confidence" />
+ * ```
+ */
+
 import type { ConfidenceTier } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
@@ -13,11 +95,24 @@ interface ConfidenceBadgeProps {
   showPattern?: boolean;
 }
 
-// WCAG AA compliant colors (4.5:1 contrast ratio on dark backgrounds)
-// High: #4ade80 on #0a0a0a = 8.5:1
-// Medium: #facc15 on #0a0a0a = 12.6:1
-// Low: #fb923c on #0a0a0a = 7.2:1
-// Pass: #9ca3af on #0a0a0a = 5.4:1
+/**
+ * Color Configuration
+ * ===================
+ *
+ * Colors are chosen for both aesthetics and accessibility:
+ *
+ * WCAG AA Contrast Ratios (text on #0a0a0a dark background):
+ * - High (Green #4ade80): 8.5:1 ratio - Excellent
+ * - Medium (Yellow #facc15): 12.6:1 ratio - Excellent
+ * - Low (Orange #fb923c): 7.2:1 ratio - Good
+ * - Pass (Gray #9ca3af): 5.4:1 ratio - Passes AA
+ *
+ * Color Psychology:
+ * - Green: Positive, go signal, confidence
+ * - Yellow: Caution, attention, moderate
+ * - Orange: Warning, lower confidence
+ * - Gray: Neutral, no action needed
+ */
 const config = {
   high: {
     bg: 'bg-green-500/20',

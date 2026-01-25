@@ -195,10 +195,197 @@ def _get_allowed_origins() -> list[str]:
 ALLOWED_ORIGINS = _get_allowed_origins()
 logger.info(f"CORS configured for origins: {ALLOWED_ORIGINS}")
 
+# =============================================================================
+# OpenAPI/Swagger Configuration
+# =============================================================================
+# Tag metadata for organized API documentation
+tags_metadata = [
+    {
+        "name": "Health",
+        "description": "Health check and status endpoints for monitoring and debugging.",
+    },
+    {
+        "name": "Games",
+        "description": """
+Game data endpoints for retrieving NCAA basketball games.
+
+**Key Endpoints:**
+- `GET /today` - Today's games with predictions (optimized view)
+- `GET /games` - Upcoming games with pagination
+- `GET /games/{id}` - Detailed game info with AI analyses
+
+**Data Sources:**
+- ESPN schedule for game times
+- The Odds API for betting lines
+- KenPom and Haslametrics for advanced analytics
+""",
+    },
+    {
+        "name": "Predictions",
+        "description": """
+ML-based betting prediction endpoints.
+
+**Prediction Model:**
+Uses a baseline logistic regression model with features:
+- Spread magnitude and direction
+- Home court advantage adjustments
+- Conference game dynamics
+- Historical patterns for ranked vs unranked matchups
+
+**Confidence Tiers:**
+- **High**: >4% edge over implied odds
+- **Medium**: 2-4% edge
+- **Low**: <2% edge (recommend pass)
+
+**Probability Calibration:**
+Win probabilities are calibrated to account for:
+- Standard -110 vig (52.4% breakeven)
+- Public betting bias on ranked teams
+- Conference familiarity effects
+""",
+    },
+    {
+        "name": "AI Analysis",
+        "description": """
+AI-powered game analysis using Large Language Models.
+
+**Available Providers:**
+- **Claude** (Anthropic Claude Sonnet 4): Primary provider, thorough analysis
+- **Grok** (xAI Grok-3): Alternative perspective, good for comparison
+
+**Analysis Data Sources:**
+The AI receives comprehensive context including:
+- Team rankings and conference info
+- Current betting lines (spread, moneyline, total)
+- KenPom analytics (AdjO, AdjD, tempo, SOS, luck)
+- Haslametrics data (All-Play %, momentum, efficiency)
+- Prediction market prices and arbitrage signals
+
+**Cross-Validation:**
+When both KenPom and Haslametrics are available, the AI cross-validates
+between sources. Disagreement lowers confidence; agreement increases it.
+""",
+    },
+    {
+        "name": "Analytics",
+        "description": """
+Advanced analytics endpoints for KenPom and Haslametrics data.
+
+**KenPom Metrics** (subscription required):
+- AdjO/AdjD: Adjusted offensive/defensive efficiency
+- AdjEM: Efficiency margin (main power rating)
+- Tempo: Possessions per game
+- Luck: Deviation from expected record
+- SOS: Strength of schedule
+
+**Haslametrics Metrics** (FREE):
+- All-Play %: Win probability vs average D1 team
+- Momentum: Overall/offensive/defensive trends
+- Quadrant records: Performance vs NET tiers
+""",
+    },
+    {
+        "name": "Performance",
+        "description": """
+Betting performance tracking and backtesting.
+
+**Key Metrics:**
+- Win percentage (breakeven at -110 is 52.4%)
+- ROI (Return on Investment)
+- Units won/lost
+- Performance by confidence tier
+""",
+    },
+    {
+        "name": "Rankings",
+        "description": "AP poll rankings data by season and week.",
+    },
+    {
+        "name": "Admin",
+        "description": """
+Administrative endpoints for data refresh and maintenance.
+
+**Daily Refresh Pipeline:**
+1. Fetch ESPN game schedule (creates games)
+2. Fetch betting lines from The Odds API
+3. Refresh KenPom analytics (if credentials configured)
+4. Refresh Haslametrics analytics (FREE)
+5. Refresh prediction market data
+6. Detect arbitrage opportunities
+7. Generate predictions for upcoming games
+8. Run AI analysis on today's games
+
+**Typical Schedule:**
+- Full refresh: Daily at 6 AM EST via GitHub Actions
+- Individual refreshes: On-demand as needed
+""",
+    },
+    {
+        "name": "Prediction Markets",
+        "description": """
+Prediction market data from Polymarket and Kalshi.
+
+**Arbitrage Detection:**
+Compares sportsbook implied probabilities with prediction market prices.
+Actionable opportunities flagged when delta >= 10%.
+""",
+    },
+    {
+        "name": "Debug",
+        "description": "Diagnostic endpoints for troubleshooting. May expose detailed error info.",
+    },
+]
+
 app = FastAPI(
     title="Conference Contrarian API",
-    description="AI-powered NCAA basketball betting analysis",
+    description="""
+## AI-Powered NCAA Basketball Betting Analysis
+
+Conference Contrarian is a sports analytics platform that combines machine learning predictions
+with AI-powered analysis (Claude and Grok) to identify betting edges in college basketball.
+
+### Core Features
+
+- **Game Data**: Real-time game schedules, betting lines, and team information
+- **ML Predictions**: Spread cover probabilities with confidence tiers
+- **AI Analysis**: Deep game analysis using Claude (Anthropic) and Grok (xAI)
+- **Advanced Analytics**: KenPom and Haslametrics integration
+- **Prediction Markets**: Polymarket/Kalshi data with arbitrage detection
+
+### Data Flow
+
+```
+ESPN Schedule -> Games Table
+The Odds API -> Spreads Table (lines + moneylines)
+KenPom/Haslametrics -> Analytics Tables
+ML Model -> Predictions Table
+Claude/Grok -> AI Analysis Table
+```
+
+### Authentication
+
+Most endpoints are public. Admin endpoints may require an API key via query parameter.
+
+### Rate Limits
+
+- AI endpoints: 5 requests/minute per IP
+- Standard endpoints: 30 requests/minute per IP
+
+### Links
+
+- [Live Site](https://confcontrarian.com)
+- [API Documentation](/docs) (Swagger UI)
+- [ReDoc](/redoc) (Alternative docs)
+""",
     version="1.0.0",
+    openapi_tags=tags_metadata,
+    contact={
+        "name": "Conference Contrarian",
+        "url": "https://confcontrarian.com",
+    },
+    license_info={
+        "name": "MIT",
+    },
     # SECURITY: Disable automatic docs in production if needed
     # docs_url=None if os.getenv("ENVIRONMENT") == "production" else "/docs",
     # redoc_url=None if os.getenv("ENVIRONMENT") == "production" else "/redoc",

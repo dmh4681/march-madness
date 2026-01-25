@@ -1,5 +1,82 @@
 'use client';
 
+/**
+ * GameCard Component
+ * ==================
+ *
+ * Primary display component for individual NCAA basketball games.
+ * Shows matchup information, betting lines, and prediction data.
+ *
+ * Display Information
+ * ===================
+ *
+ * The GameCard displays several categories of data:
+ *
+ * **1. Game Metadata**
+ * - Tip time (Eastern timezone - standard for college basketball)
+ * - Conference game indicator (CONF badge)
+ * - Ranked matchup indicator (RANKED badge)
+ *
+ * **2. Team Information**
+ * - Team names (truncated for long names)
+ * - AP rankings (if ranked)
+ * - Home team indicator (H)
+ *
+ * **3. Betting Lines**
+ * - Point spread (home perspective)
+ *   - Negative = home team favored (e.g., -5.5)
+ *   - Positive = away team favored (displayed as negative for away)
+ * - Moneylines (hidden on mobile, visible in expanded view)
+ * - Over/under total (visible in expanded view)
+ *
+ * **4. Prediction Data**
+ * - Confidence tier badge (HIGH/MEDIUM/LOW/PASS)
+ * - Recommended bet (team + spread or ML)
+ * - Edge percentage (your advantage over fair odds)
+ *
+ * Betting Line Display
+ * ====================
+ *
+ * Spreads are displayed from each team's perspective:
+ * - Home team: Shows actual spread (e.g., -5.5 means home favored by 5.5)
+ * - Away team: Shows inverted spread (e.g., +5.5 means away getting 5.5 points)
+ *
+ * Example:
+ * ```
+ * Duke     -5.5  -210   (favored by 5.5, risk $210 to win $100)
+ * UNC      +5.5  +175   (underdog by 5.5, risk $100 to win $175)
+ * ```
+ *
+ * Accessibility Features
+ * ======================
+ *
+ * - Semantic HTML (article, time, role attributes)
+ * - ARIA labels for all interactive elements
+ * - Screen reader announcements for odds changes
+ * - Touch-friendly targets (44px minimum)
+ * - Keyboard navigation support
+ * - Focus indicators
+ *
+ * Mobile Responsiveness
+ * =====================
+ *
+ * The card adapts to screen size:
+ * - Mobile: Compact view with expand button for details
+ * - Desktop: Full view with moneylines visible
+ *
+ * @example
+ * ```tsx
+ * // Basic usage
+ * <GameCard game={game} />
+ *
+ * // Without prediction display
+ * <GameCard game={game} showPrediction={false} />
+ *
+ * // With analytics section
+ * <GameCardWithAnalytics game={game} />
+ * ```
+ */
+
 import { useState, useId, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { format } from 'date-fns';
@@ -10,6 +87,7 @@ import { GameCardSkeleton, Skeleton } from './ui/skeleton';
 import { useAnnounce } from './ui/LiveRegion';
 import { useGameAnalytics } from '@/hooks/useGameAnalytics';
 import { cn } from '@/lib/utils';
+import { InfoTooltip, BETTING_TERMS } from './Tooltip';
 
 interface GameCardProps {
   game: TodayGame;
@@ -190,7 +268,7 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
           <span>O/U {game.over_under || 'N/A'}</span>
         </div>
 
-        {/* Prediction - touch-friendly */}
+        {/* Prediction - touch-friendly with tooltips for betting terms */}
         {showPrediction && game.predicted_home_cover_prob !== null && (
           <div
             id={predictionId}
@@ -199,7 +277,16 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
             className="flex items-center justify-between flex-wrap gap-2 min-h-[44px] sm:min-h-0"
           >
             <div className="flex items-center gap-2">
-              <ConfidenceBadge tier={game.confidence_tier} size="touch" />
+              {/* Confidence badge with inline help */}
+              <span className="flex items-center gap-1">
+                <ConfidenceBadge tier={game.confidence_tier} size="touch" />
+                <InfoTooltip
+                  content={BETTING_TERMS.confidence.content}
+                  helpLink={BETTING_TERMS.confidence.helpLink}
+                  position="bottom"
+                />
+              </span>
+              {/* Recommended bet display */}
               {game.recommended_bet && game.recommended_bet !== 'pass' && (
                 <span
                   className="text-sm font-medium text-white truncate max-w-[150px] sm:max-w-none"
@@ -218,12 +305,20 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
                 </span>
               )}
             </div>
+            {/* Edge display with tooltip explaining what edge means */}
             {game.edge_pct && game.edge_pct > 0 && (
-              <span
-                className="text-sm text-green-400 shrink-0"
-                aria-label={`${game.edge_pct.toFixed(1)} percent edge`}
-              >
-                +{game.edge_pct.toFixed(1)}% edge
+              <span className="flex items-center gap-1 shrink-0">
+                <span
+                  className="text-sm text-green-400"
+                  aria-label={`${game.edge_pct.toFixed(1)} percent edge`}
+                >
+                  +{game.edge_pct.toFixed(1)}% edge
+                </span>
+                <InfoTooltip
+                  content={BETTING_TERMS.edge.content}
+                  helpLink={BETTING_TERMS.edge.helpLink}
+                  position="left"
+                />
               </span>
             )}
           </div>
@@ -354,22 +449,39 @@ function AnalyticsSection({ gameId }: { gameId: string }) {
 
           {analytics && !isLoading && (
             <div className="space-y-4">
-              {/* KenPom Data */}
+              {/* KenPom Data - with tooltips explaining metrics */}
               {(analytics.home_kenpom || analytics.away_kenpom) && (
                 <div>
-                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
                     KenPom Ratings
+                    <InfoTooltip
+                      content="Tempo-adjusted efficiency metrics. The gold standard for college basketball analytics."
+                      helpLink="/help#kenpom"
+                      position="right"
+                    />
                   </h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="space-y-1">
                       <p className="text-gray-500 text-xs">{analytics.away_team}</p>
                       {analytics.away_kenpom ? (
                         <>
-                          <p className="text-white">
+                          <p className="text-white flex items-center gap-1">
                             #{analytics.away_kenpom.rank} ({analytics.away_kenpom.adj_efficiency_margin?.toFixed(1) || 'N/A'} AdjEM)
+                            <InfoTooltip
+                              content={BETTING_TERMS.adjEM.content}
+                              helpLink={BETTING_TERMS.adjEM.helpLink}
+                              position="right"
+                              size="sm"
+                            />
                           </p>
-                          <p className="text-gray-400 text-xs">
+                          <p className="text-gray-400 text-xs flex items-center gap-1">
                             O: {analytics.away_kenpom.adj_offense?.toFixed(1)} | D: {analytics.away_kenpom.adj_defense?.toFixed(1)}
+                            <InfoTooltip
+                              content="O = Offense (higher better). D = Defense (lower better). Points per 100 possessions."
+                              helpLink="/help#kenpom"
+                              position="right"
+                              size="sm"
+                            />
                           </p>
                         </>
                       ) : (
@@ -395,22 +507,39 @@ function AnalyticsSection({ gameId }: { gameId: string }) {
                 </div>
               )}
 
-              {/* Haslametrics Data */}
+              {/* Haslametrics Data - with tooltips explaining metrics */}
               {(analytics.home_haslametrics || analytics.away_haslametrics) && (
                 <div>
-                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+                  <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
                     Haslametrics
+                    <InfoTooltip
+                      content="All-Play methodology analytics. FREE alternative to KenPom with unique momentum insights."
+                      helpLink="/help#haslametrics"
+                      position="right"
+                    />
                   </h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div className="space-y-1">
                       <p className="text-gray-500 text-xs">{analytics.away_team}</p>
                       {analytics.away_haslametrics ? (
                         <>
-                          <p className="text-white">
+                          <p className="text-white flex items-center gap-1">
                             #{analytics.away_haslametrics.rank} ({analytics.away_haslametrics.all_play_pct?.toFixed(1)}% All-Play)
+                            <InfoTooltip
+                              content={BETTING_TERMS.allPlay.content}
+                              helpLink={BETTING_TERMS.allPlay.helpLink}
+                              position="right"
+                              size="sm"
+                            />
                           </p>
-                          <p className="text-gray-400 text-xs">
+                          <p className="text-gray-400 text-xs flex items-center gap-1">
                             Momentum: {analytics.away_haslametrics.momentum_overall?.toFixed(1) || 'N/A'}
+                            <InfoTooltip
+                              content={BETTING_TERMS.momentum.content}
+                              helpLink={BETTING_TERMS.momentum.helpLink}
+                              position="right"
+                              size="sm"
+                            />
                           </p>
                         </>
                       ) : (

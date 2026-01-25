@@ -1,12 +1,154 @@
 """
 Daily Data Refresh Pipeline
+============================
 
-Fetches current games, spreads, and rankings, then runs predictions.
+This module orchestrates the complete data collection and prediction pipeline
+for Conference Contrarian. It is the heart of the data infrastructure, ensuring
+all game data, betting lines, advanced analytics, and AI analyses are current.
 
-Usage:
-    python -m backend.data_collection.daily_refresh
+Architecture Overview
+=====================
 
-Can also be triggered via API endpoint: POST /refresh
+The pipeline follows a sequential data flow with strategic dependencies:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        DAILY REFRESH PIPELINE                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Step 0: Cache Invalidation                                             │
+│  └── Clear ratings caches to ensure fresh data                          │
+│                                                                         │
+│  Step 1: ESPN Game Schedule (PRIMARY SOURCE)                            │
+│  └── Creates/updates games table with schedule data                     │
+│      - External ID, date, tip time                                      │
+│      - Home/away team IDs                                               │
+│      - Conference game flag                                             │
+│                                                                         │
+│  Step 2: Betting Lines (The Odds API)                                   │
+│  └── Adds spreads to existing games                                     │
+│      - Spread (home perspective)                                        │
+│      - Moneylines (home/away)                                           │
+│      - Over/under total                                                 │
+│                                                                         │
+│  Step 3a: KenPom Analytics (Subscription Required)                      │
+│  └── Updates kenpom_ratings table                                       │
+│      - Adjusted efficiency metrics                                      │
+│      - Tempo, SOS, luck factors                                         │
+│                                                                         │
+│  Step 3b: Haslametrics Analytics (FREE)                                 │
+│  └── Updates haslametrics_ratings table                                 │
+│      - All-Play percentage                                              │
+│      - Momentum indicators                                              │
+│      - Quadrant records                                                 │
+│                                                                         │
+│  Step 4: ML Predictions                                                 │
+│  └── Creates predictions for games without them                         │
+│      - Cover probability                                                │
+│      - Confidence tier                                                  │
+│      - Recommended bet                                                  │
+│                                                                         │
+│  Step 5: Game Results                                                   │
+│  └── Updates scores for completed games                                 │
+│      - Final scores                                                     │
+│      - Bet grading                                                      │
+│                                                                         │
+│  Step 6: Today's View                                                   │
+│  └── Refreshes materialized view for dashboard                          │
+│                                                                         │
+│  Step 7: AI Analysis                                                    │
+│  └── Runs Claude analysis on today's unanalyzed games                   │
+│      - Structured betting recommendation                                │
+│      - Key factors and reasoning                                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+Data Dependencies
+=================
+
+The order of steps matters due to dependencies:
+
+1. **ESPN must run first** - Creates game records that other steps reference
+2. **Odds API needs games** - Can only add spreads to existing games
+3. **Analytics are independent** - KenPom and Haslametrics can run in parallel
+4. **Predictions need spreads** - Uses spread data for probability calculations
+5. **AI Analysis needs everything** - Uses all available data for comprehensive analysis
+
+Scheduling
+==========
+
+- **Primary Schedule**: Daily at 6 AM EST via GitHub Actions cron
+- **Manual Trigger**: POST /refresh endpoint
+- **Individual Refreshes**: Separate endpoints for testing:
+  - POST /refresh-haslametrics (fast, ~10-20 seconds)
+  - POST /refresh-espn-times (fast, ~5-10 seconds)
+  - POST /regenerate-predictions (fast, no external API calls)
+  - POST /refresh-prediction-markets (moderate, requires async)
+
+Error Handling
+==============
+
+Each step is wrapped in try/except to allow partial success:
+- Failures are logged with context
+- Pipeline continues even if individual steps fail
+- Final results dict includes error details for debugging
+
+Performance Considerations
+==========================
+
+- **Full refresh**: 3-5 minutes (KenPom login + all scrapers + AI analysis)
+- **ESPN + Odds only**: ~30 seconds
+- **KenPom**: ~60 seconds (requires Selenium browser automation)
+- **Haslametrics**: ~15 seconds (direct XML fetch)
+- **AI Analysis**: ~10 seconds per game (API call + DB insert)
+
+Cache Strategy
+==============
+
+The pipeline invalidates ratings caches at the start to ensure:
+- Fresh data is fetched from scrapers
+- Stale cache doesn't mask scraper failures
+- Cache is rebuilt with fresh data after refresh
+
+Usage Examples
+==============
+
+```python
+# Command line - full refresh
+python -m backend.data_collection.daily_refresh
+
+# Command line - with force regenerate predictions
+python -c "from backend.data_collection.daily_refresh import run_daily_refresh; run_daily_refresh(force_regenerate_predictions=True)"
+
+# Via API - full refresh
+curl -X POST https://api.confcontrarian.com/refresh
+
+# Via API - haslametrics only (fast)
+curl -X POST https://api.confcontrarian.com/refresh-haslametrics
+```
+
+Environment Variables
+=====================
+
+Required:
+- SUPABASE_URL: PostgreSQL database URL
+- SUPABASE_SERVICE_KEY: Database service key
+
+Optional:
+- ODDS_API_KEY: For betting lines (500 req/month free tier)
+- KENPOM_EMAIL/PASSWORD: For KenPom analytics (subscription)
+- ANTHROPIC_API_KEY: For Claude AI analysis
+- GROK_API_KEY: For Grok AI analysis
+
+See Also
+========
+
+- backend/api/main.py: API endpoints that trigger refresh
+- backend/data_collection/kenpom_scraper.py: KenPom data collection
+- backend/data_collection/haslametrics_scraper.py: Haslametrics data collection
+- backend/data_collection/espn_scraper.py: ESPN schedule data
+- backend/api/ai_service.py: AI analysis implementation
 """
 
 import os
