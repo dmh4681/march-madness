@@ -66,6 +66,13 @@ if not ODDS_API_KEY:
 # SECURITY: Import secure Supabase client with timeouts and validation
 from backend.api.supabase_client import get_supabase, _validate_uuid, _sanitize_string
 
+# Import cache utilities for invalidation during refresh
+try:
+    from backend.utils.cache import invalidate_ratings_caches, ratings_cache
+except ImportError:
+    # Fallback for direct module execution
+    from ..utils.cache import invalidate_ratings_caches, ratings_cache
+
 def _get_supabase():
     """Get the secure Supabase client with proper error handling."""
     try:
@@ -695,6 +702,13 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
     }
 
     try:
+        # Step 0: Invalidate all ratings caches before refresh
+        # This ensures we fetch fresh data from scrapers and don't serve stale cache
+        print("\n=== Step 0: Invalidating Ratings Caches ===")
+        cache_invalidation = invalidate_ratings_caches()
+        results["cache_invalidated"] = cache_invalidation
+        print(f"Cache invalidated: KenPom={cache_invalidation.get('kenpom_invalidated', 0)}, "
+              f"Haslametrics={cache_invalidation.get('haslametrics_invalidated', 0)}")
         # 1. ESPN is PRIMARY source of games - creates all games first
         try:
             print("\n=== Step 1: ESPN Game Schedule (PRIMARY) ===")
@@ -752,6 +766,13 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         results["status"] = "error"
         results["error"] = str(e)
         print(f"\nERROR: {e}")
+
+    # Log final cache stats
+    cache_stats = ratings_cache.get_stats()
+    results["cache_stats"] = cache_stats
+    print(f"\nCache stats: hits={cache_stats.get('hits', 0)}, "
+          f"misses={cache_stats.get('misses', 0)}, "
+          f"hit_rate={cache_stats.get('hit_rate_pct', 0):.1f}%")
 
     print("\n" + "=" * 60)
     print("Daily Refresh Complete")

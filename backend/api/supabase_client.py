@@ -8,6 +8,11 @@ SECURITY NOTES:
 - All user input is passed through SDK methods, preventing SQL injection
 - Service key is used for backend operations (not exposed to frontend)
 - Connection pooling and timeouts are handled by the SDK's httpx client
+
+CACHING NOTES:
+- KenPom and Haslametrics ratings are cached with 1-hour TTL
+- Cache is invalidated during daily refresh
+- Cache hit/miss is logged for monitoring
 """
 
 import os
@@ -16,6 +21,13 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 from functools import wraps
+
+# Import cache module
+try:
+    from backend.utils.cache import ratings_cache
+except ImportError:
+    # Fallback for direct module execution
+    from ..utils.cache import ratings_cache
 
 # Timezone handling - use Eastern time for date queries
 try:
@@ -535,22 +547,80 @@ def get_upcoming_games_view(days: int = 7) -> list[dict]:
     return result.data
 
 
-def get_team_kenpom(team_id: str, season: int = 2025) -> Optional[dict]:
-    """Get the latest KenPom rating for a team."""
+def get_team_kenpom(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
+    """
+    Get the latest KenPom rating for a team with caching.
+
+    Args:
+        team_id: Team UUID
+        season: Season year
+        use_cache: Whether to use cached data (default: True)
+
+    Returns:
+        Dict with KenPom data or None
+    """
+    cache_key_kwargs = {"team_id": team_id, "season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("kenpom_team", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.debug(f"Cache HIT: kenpom_team (team_id={team_id[:8]}..., season={season})")
+            return cached_data
+
+    logger.debug(f"Cache MISS: kenpom_team (team_id={team_id[:8]}..., season={season})")
+
+    # Fetch from database
     client = get_supabase()
     result = client.table("kenpom_ratings").select("*").eq(
         "team_id", team_id
     ).eq("season", season).order("captured_at", desc=True).limit(1).execute()
-    return result.data[0] if result.data else None
+
+    if result.data:
+        # Cache the result
+        ratings_cache.set("kenpom_team", result.data[0], **cache_key_kwargs)
+        logger.debug(f"Cache SET: kenpom_team (team_id={team_id[:8]}..., season={season})")
+        return result.data[0]
+
+    return None
 
 
-def get_team_haslametrics(team_id: str, season: int = 2025) -> Optional[dict]:
-    """Get the latest Haslametrics rating for a team."""
+def get_team_haslametrics(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
+    """
+    Get the latest Haslametrics rating for a team with caching.
+
+    Args:
+        team_id: Team UUID
+        season: Season year
+        use_cache: Whether to use cached data (default: True)
+
+    Returns:
+        Dict with Haslametrics data or None
+    """
+    cache_key_kwargs = {"team_id": team_id, "season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("haslametrics_team", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.debug(f"Cache HIT: haslametrics_team (team_id={team_id[:8]}..., season={season})")
+            return cached_data
+
+    logger.debug(f"Cache MISS: haslametrics_team (team_id={team_id[:8]}..., season={season})")
+
+    # Fetch from database
     client = get_supabase()
     result = client.table("haslametrics_ratings").select("*").eq(
         "team_id", team_id
     ).eq("season", season).order("captured_at", desc=True).limit(1).execute()
-    return result.data[0] if result.data else None
+
+    if result.data:
+        # Cache the result
+        ratings_cache.set("haslametrics_team", result.data[0], **cache_key_kwargs)
+        logger.debug(f"Cache SET: haslametrics_team (team_id={team_id[:8]}..., season={season})")
+        return result.data[0]
+
+    return None
 
 
 def calculate_season_stats(season: int) -> dict:
@@ -677,3 +747,53 @@ def insert_arbitrage_opportunity(opportunity_data: dict) -> dict:
 
     result = client.table("arbitrage_opportunities").insert(opportunity_data).execute()
     return result.data[0] if result.data else {}
+
+
+# ============================================
+# CACHE MANAGEMENT
+# ============================================
+
+
+def get_cache_stats() -> dict:
+    """
+    Get cache statistics for monitoring.
+
+    Returns:
+        Dict with cache hit/miss rates, entry counts, etc.
+    """
+    return ratings_cache.get_stats()
+
+
+def invalidate_ratings_cache() -> dict:
+    """
+    Invalidate all ratings caches (KenPom and Haslametrics).
+
+    Call this before refreshing ratings data.
+
+    Returns:
+        Dict with counts of invalidated entries
+    """
+    kenpom_count = ratings_cache.invalidate("kenpom")
+    hasla_count = ratings_cache.invalidate("haslametrics")
+
+    logger.info(
+        f"Ratings caches invalidated: KenPom entries={kenpom_count}, Haslametrics entries={hasla_count}"
+    )
+
+    return {
+        "kenpom_invalidated": kenpom_count,
+        "haslametrics_invalidated": hasla_count,
+    }
+
+
+def cleanup_expired_cache() -> int:
+    """
+    Clean up expired cache entries.
+
+    Returns:
+        Number of expired entries removed
+    """
+    count = ratings_cache.cleanup_expired()
+    if count > 0:
+        logger.info(f"Cleaned up {count} expired cache entries")
+    return count

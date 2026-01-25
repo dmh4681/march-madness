@@ -12,6 +12,7 @@ Environment variables:
     KENPOM_PASSWORD - Your KenPom account password
 """
 
+import logging
 import os
 import sys
 from datetime import datetime
@@ -22,6 +23,16 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Import cache after defining logger
+try:
+    from backend.utils.cache import ratings_cache, cached
+except ImportError:
+    # Fallback if running as standalone script
+    from ..utils.cache import ratings_cache, cached
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -124,9 +135,9 @@ def get_team_id(team_name: str) -> Optional[str]:
     return None
 
 
-def fetch_kenpom_ratings(season: int = 2025) -> Optional[pd.DataFrame]:
+def _fetch_kenpom_ratings_uncached(season: int = 2025) -> Optional[pd.DataFrame]:
     """
-    Fetch KenPom Pomeroy ratings for a season.
+    Internal function to fetch KenPom ratings without caching.
 
     Args:
         season: The season year (e.g., 2025 for 2024-25 season)
@@ -163,6 +174,42 @@ def fetch_kenpom_ratings(season: int = 2025) -> Optional[pd.DataFrame]:
     except Exception as e:
         print(f"Error fetching KenPom data: {e}")
         return None
+
+
+def fetch_kenpom_ratings(season: int = 2025, use_cache: bool = True) -> Optional[pd.DataFrame]:
+    """
+    Fetch KenPom Pomeroy ratings for a season with caching.
+
+    Caches results for 1 hour to reduce API calls and login frequency.
+
+    Args:
+        season: The season year (e.g., 2025 for 2024-25 season)
+        use_cache: Whether to use cached data (default: True)
+
+    Returns:
+        DataFrame with KenPom ratings or None if failed
+    """
+    cache_key_kwargs = {"season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("kenpom_ratings", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.info(f"Cache HIT: kenpom_ratings (season={season})")
+            print(f"Using cached KenPom ratings for {season}")
+            return cached_data
+
+    logger.info(f"Cache MISS: kenpom_ratings (season={season})")
+
+    # Fetch fresh data
+    ratings = _fetch_kenpom_ratings_uncached(season)
+
+    # Cache the result if successful
+    if ratings is not None and len(ratings) > 0:
+        ratings_cache.set("kenpom_ratings", ratings, **cache_key_kwargs)
+        logger.info(f"Cache SET: kenpom_ratings (season={season}, {len(ratings)} teams)")
+
+    return ratings
 
 
 def fetch_kenpom_fourfactors(season: int = 2025) -> Optional[pd.DataFrame]:
@@ -303,29 +350,70 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
-def get_team_kenpom_rating(team_id: str, season: int = 2025) -> Optional[dict]:
+def get_team_kenpom_rating(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
     """
-    Get the latest KenPom rating for a team.
+    Get the latest KenPom rating for a team with caching.
+
+    Caches individual team ratings for 1 hour.
 
     Args:
         team_id: Team UUID
         season: Season year
+        use_cache: Whether to use cached data (default: True)
 
     Returns:
         Dict with KenPom data or None
     """
+    cache_key_kwargs = {"team_id": team_id, "season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("kenpom_team", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.debug(f"Cache HIT: kenpom_team (team_id={team_id[:8]}..., season={season})")
+            return cached_data
+
+    logger.debug(f"Cache MISS: kenpom_team (team_id={team_id[:8]}..., season={season})")
+
+    # Fetch from database
     result = supabase.table("kenpom_ratings").select("*").eq(
         "team_id", team_id
     ).eq("season", season).order("captured_at", desc=True).limit(1).execute()
 
     if result.data:
+        # Cache the result
+        ratings_cache.set("kenpom_team", result.data[0], **cache_key_kwargs)
+        logger.debug(f"Cache SET: kenpom_team (team_id={team_id[:8]}..., season={season})")
         return result.data[0]
+
     return None
+
+
+def invalidate_kenpom_cache() -> dict:
+    """
+    Invalidate all KenPom-related caches.
+
+    Call this before fetching fresh data to ensure no stale data is served.
+
+    Returns:
+        Dict with counts of invalidated entries
+    """
+    ratings_count = ratings_cache.invalidate("kenpom_ratings")
+    team_count = ratings_cache.invalidate("kenpom_team")
+
+    logger.info(f"KenPom cache invalidated: ratings={ratings_count}, teams={team_count}")
+
+    return {
+        "ratings_invalidated": ratings_count,
+        "teams_invalidated": team_count,
+    }
 
 
 def refresh_kenpom_data(season: int = 2025) -> dict:
     """
     Full refresh of KenPom data.
+
+    Invalidates cache before fetching fresh data.
 
     Args:
         season: Season year to fetch
@@ -345,8 +433,13 @@ def refresh_kenpom_data(season: int = 2025) -> dict:
         "status": "success",
     }
 
-    # Fetch ratings
-    df = fetch_kenpom_ratings(season)
+    # Invalidate cache before refresh
+    cache_results = invalidate_kenpom_cache()
+    results["cache_invalidated"] = cache_results
+    print(f"Cache invalidated: {cache_results}")
+
+    # Fetch ratings (bypass cache since we just invalidated)
+    df = fetch_kenpom_ratings(season, use_cache=False)
 
     if df is None or len(df) == 0:
         results["status"] = "error"

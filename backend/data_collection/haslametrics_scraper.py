@@ -13,6 +13,7 @@ Example:
     python -m backend.data_collection.haslametrics_scraper 2025
 """
 
+import logging
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -24,6 +25,16 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 
 load_dotenv()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Import cache after defining logger
+try:
+    from backend.utils.cache import ratings_cache, cached
+except ImportError:
+    # Fallback if running as standalone script
+    from ..utils.cache import ratings_cache, cached
 
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -509,9 +520,9 @@ def get_team_id(team_name: str) -> Optional[str]:
     return None
 
 
-def fetch_haslametrics_ratings(season: int = 2025) -> Optional[list]:
+def _fetch_haslametrics_ratings_uncached(season: int = 2025) -> Optional[list]:
     """
-    Fetch Haslametrics ratings from their XML endpoint.
+    Internal function to fetch Haslametrics ratings without caching.
 
     Args:
         season: The season year (e.g., 2025 for 2024-25 season)
@@ -592,6 +603,42 @@ def fetch_haslametrics_ratings(season: int = 2025) -> Optional[list]:
     except Exception as e:
         print(f"Error fetching Haslametrics data: {e}")
         return None
+
+
+def fetch_haslametrics_ratings(season: int = 2025, use_cache: bool = True) -> Optional[list]:
+    """
+    Fetch Haslametrics ratings from their XML endpoint with caching.
+
+    Caches results for 1 hour to reduce external API calls.
+
+    Args:
+        season: The season year (e.g., 2025 for 2024-25 season)
+        use_cache: Whether to use cached data (default: True)
+
+    Returns:
+        List of team rating dicts or None if failed
+    """
+    cache_key_kwargs = {"season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("haslametrics_ratings", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.info(f"Cache HIT: haslametrics_ratings (season={season})")
+            print(f"Using cached Haslametrics ratings for {season}")
+            return cached_data
+
+    logger.info(f"Cache MISS: haslametrics_ratings (season={season})")
+
+    # Fetch fresh data
+    ratings = _fetch_haslametrics_ratings_uncached(season)
+
+    # Cache the result if successful
+    if ratings is not None and len(ratings) > 0:
+        ratings_cache.set("haslametrics_ratings", ratings, **cache_key_kwargs)
+        logger.info(f"Cache SET: haslametrics_ratings (season={season}, {len(ratings)} teams)")
+
+    return ratings
 
 
 def store_haslametrics_ratings(teams: list, season: int) -> dict:
@@ -701,29 +748,70 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
-def get_team_haslametrics_rating(team_id: str, season: int = 2025) -> Optional[dict]:
+def get_team_haslametrics_rating(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
     """
-    Get the latest Haslametrics rating for a team.
+    Get the latest Haslametrics rating for a team with caching.
+
+    Caches individual team ratings for 1 hour.
 
     Args:
         team_id: Team UUID
         season: Season year
+        use_cache: Whether to use cached data (default: True)
 
     Returns:
         Dict with Haslametrics data or None
     """
+    cache_key_kwargs = {"team_id": team_id, "season": season}
+
+    # Try cache first if enabled
+    if use_cache:
+        cached_data = ratings_cache.get("haslametrics_team", **cache_key_kwargs)
+        if cached_data is not None:
+            logger.debug(f"Cache HIT: haslametrics_team (team_id={team_id[:8]}..., season={season})")
+            return cached_data
+
+    logger.debug(f"Cache MISS: haslametrics_team (team_id={team_id[:8]}..., season={season})")
+
+    # Fetch from database
     result = supabase.table("haslametrics_ratings").select("*").eq(
         "team_id", team_id
     ).eq("season", season).order("captured_at", desc=True).limit(1).execute()
 
     if result.data:
+        # Cache the result
+        ratings_cache.set("haslametrics_team", result.data[0], **cache_key_kwargs)
+        logger.debug(f"Cache SET: haslametrics_team (team_id={team_id[:8]}..., season={season})")
         return result.data[0]
+
     return None
+
+
+def invalidate_haslametrics_cache() -> dict:
+    """
+    Invalidate all Haslametrics-related caches.
+
+    Call this before fetching fresh data to ensure no stale data is served.
+
+    Returns:
+        Dict with counts of invalidated entries
+    """
+    ratings_count = ratings_cache.invalidate("haslametrics_ratings")
+    team_count = ratings_cache.invalidate("haslametrics_team")
+
+    logger.info(f"Haslametrics cache invalidated: ratings={ratings_count}, teams={team_count}")
+
+    return {
+        "ratings_invalidated": ratings_count,
+        "teams_invalidated": team_count,
+    }
 
 
 def refresh_haslametrics_data(season: int = 2025) -> dict:
     """
     Full refresh of Haslametrics data.
+
+    Invalidates cache before fetching fresh data.
 
     Args:
         season: Season year to fetch
@@ -743,8 +831,13 @@ def refresh_haslametrics_data(season: int = 2025) -> dict:
         "status": "success",
     }
 
-    # Fetch ratings
-    teams = fetch_haslametrics_ratings(season)
+    # Invalidate cache before refresh
+    cache_results = invalidate_haslametrics_cache()
+    results["cache_invalidated"] = cache_results
+    print(f"Cache invalidated: {cache_results}")
+
+    # Fetch ratings (bypass cache since we just invalidated)
+    teams = fetch_haslametrics_ratings(season, use_cache=False)
 
     if teams is None or len(teams) == 0:
         results["status"] = "error"
