@@ -633,26 +633,6 @@ def refresh_prediction_markets() -> dict:
         return {"status": "error", "error": str(e)}
 
 
-def refresh_sentiment_data() -> dict:
-    """Refresh social sentiment data for today's games."""
-    print("\n=== Refreshing Sentiment Data ===")
-
-    try:
-        import asyncio
-        from .sentiment_scraper import refresh_sentiment_for_games
-
-        # Run the async sentiment refresh
-        results = asyncio.run(refresh_sentiment_for_games())
-        return results
-
-    except ImportError as e:
-        print(f"Sentiment scraper import error: {e}")
-        return {"status": "error", "error": str(e)}
-    except Exception as e:
-        print(f"Error refreshing sentiment data: {e}")
-        return {"status": "error", "error": str(e)}
-
-
 def run_ai_analysis() -> dict:
     """Run AI analysis on today's games that don't have analysis yet."""
     print("\n=== Running AI Analysis ===")
@@ -774,15 +754,7 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         view_results = create_today_games_view()
         results["today"] = view_results
 
-        # 6. Refresh sentiment data for today's games
-        try:
-            sentiment_results = refresh_sentiment_data()
-            results["sentiment"] = sentiment_results
-        except Exception as e:
-            print(f"Sentiment refresh error (non-fatal): {e}")
-            results["sentiment"] = {"error": str(e)}
-
-        # 7. Run AI analysis on today's games (uses KenPom, sentiment data if available)
+        # 6. Run AI analysis on today's games (uses KenPom data if available)
         try:
             ai_results = run_ai_analysis()
             results["ai_analysis"] = ai_results

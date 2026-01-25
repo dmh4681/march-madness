@@ -29,7 +29,6 @@ from .supabase_client import (
     get_team_haslametrics,
     get_game_prediction_markets,
     get_game_arbitrage_opportunities,
-    get_game_sentiment,
     insert_ai_analysis,
 )
 
@@ -208,11 +207,6 @@ def build_game_context(game_id: str) -> dict:
     prediction_markets = get_game_prediction_markets(game_id)
     arbitrage_opportunities = get_game_arbitrage_opportunities(game_id)
 
-    # Get sentiment data
-    sentiment_data = get_game_sentiment(game_id)
-    home_sentiment = sentiment_data.get("home_sentiment")
-    away_sentiment = sentiment_data.get("away_sentiment")
-
     return {
         "game_id": game_id,
         "date": game.get("date"),
@@ -239,9 +233,6 @@ def build_game_context(game_id: str) -> dict:
         # Prediction market data
         "prediction_markets": prediction_markets,
         "arbitrage_opportunities": arbitrage_opportunities,
-        # Sentiment data
-        "home_sentiment": home_sentiment,
-        "away_sentiment": away_sentiment,
     }
 
 
@@ -360,72 +351,6 @@ def build_analysis_prompt(context: dict) -> str:
   - Actionable: {"YES" if arb.get('is_actionable') else "No"}
 """
 
-    # Build sentiment section if data is available
-    sentiment_section = ""
-    home_sentiment = context.get("home_sentiment")
-    away_sentiment = context.get("away_sentiment")
-
-    def _get_sentiment_label(score):
-        if score is None:
-            return "N/A"
-        if score >= 0.6:
-            return "Bullish"
-        elif score <= 0.4:
-            return "Bearish"
-        return "Neutral"
-
-    if home_sentiment or away_sentiment:
-        sentiment_section = "\n## SOCIAL SENTIMENT (Twitter + Reddit + News)\n"
-
-        if home_sentiment:
-            hs = home_sentiment
-            score = hs.get('sentiment_score')
-            label = _get_sentiment_label(score)
-            pos = hs.get('positive_pct', 0) or 0
-            neg = hs.get('negative_pct', 0) or 0
-            neutral = hs.get('neutral_pct', 0) or 0
-            volume = hs.get('volume', 'N/A')
-            trending = hs.get('trending', False)
-            narratives = hs.get('key_narratives', [])
-            insights = hs.get('betting_insights', [])
-
-            sentiment_section += f"""
-**{context['home_team']} Sentiment**
-- Score: {score:.3f if score else 'N/A'} ({label})
-- Breakdown: +{pos:.1f}% / -{neg:.1f}% / ~{neutral:.1f}%
-- Volume: {volume} {"(TRENDING)" if trending else ""}
-- Key Narratives: {', '.join(narratives[:3]) if narratives else 'None'}
-- Betting Insights: {', '.join(insights[:2]) if insights else 'None'}
-"""
-
-        if away_sentiment:
-            aws = away_sentiment
-            score = aws.get('sentiment_score')
-            label = _get_sentiment_label(score)
-            pos = aws.get('positive_pct', 0) or 0
-            neg = aws.get('negative_pct', 0) or 0
-            neutral = aws.get('neutral_pct', 0) or 0
-            volume = aws.get('volume', 'N/A')
-            trending = aws.get('trending', False)
-            narratives = aws.get('key_narratives', [])
-            insights = aws.get('betting_insights', [])
-
-            sentiment_section += f"""
-**{context['away_team']} Sentiment**
-- Score: {score:.3f if score else 'N/A'} ({label})
-- Breakdown: +{pos:.1f}% / -{neg:.1f}% / ~{neutral:.1f}%
-- Volume: {volume} {"(TRENDING)" if trending else ""}
-- Key Narratives: {', '.join(narratives[:3]) if narratives else 'None'}
-- Betting Insights: {', '.join(insights[:2]) if insights else 'None'}
-"""
-
-        sentiment_section += """
-**Sentiment Analysis Points:**
-- Public sentiment vs analytics alignment
-- Narrative-driven line movement potential
-- Contrarian opportunities (fade the public when sentiment is extreme)
-"""
-
     # Build analysis considerations based on available data
     analysis_points = """1. Ranking differential and what it implies about team quality
 2. Home court advantage (if applicable)
@@ -473,7 +398,7 @@ Venue: {context['venue'] or 'TBD'}
 Spread: {spread_str or 'Not available'}
 {ml_str}
 Total: O/U {context['total'] or 'N/A'}
-{kenpom_section}{haslametrics_section}{pm_section}{sentiment_section}
+{kenpom_section}{haslametrics_section}{pm_section}
 ## CONTEXT
 - Conference Game: {'Yes' if context['is_conference_game'] else 'No'}
 - Same Conference: {'Yes' if context['home_conference'] == context['away_conference'] else 'No'}
@@ -505,10 +430,6 @@ Important guidelines:
 - When prediction market data is available, consider where public money is flowing
 - Large deltas between prediction markets and sportsbooks may signal market inefficiency
 - Actionable arbitrage signals (>=10% delta) warrant serious consideration
-- When sentiment data is available, consider public perception vs analytical reality
-- Extreme bullish/bearish sentiment (>0.7 or <0.3) may indicate contrarian opportunities
-- Sentiment trending + high volume = narratives may be moving the line (potential value on opposite side)
-- Compare sentiment to analytics: if sentiment is bullish but analytics are bearish, consider fading sentiment
 
 Respond with ONLY the JSON object, no additional text."""
 
