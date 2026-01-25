@@ -1,12 +1,48 @@
 """
-AI Service for game analysis using Claude and Grok.
+AI Service for Game Analysis using Claude and Grok
 
-Provides betting analysis and recommendations using LLMs.
+Provides AI-powered betting analysis and recommendations using Large Language Models.
+
+Architecture Overview:
+=====================
+This module orchestrates AI analysis by:
+1. Building comprehensive game context from multiple data sources
+2. Constructing optimized prompts with all available analytics
+3. Calling Claude (Anthropic) or Grok (xAI) APIs
+4. Parsing structured JSON responses
+5. Storing analyses in database for caching/historical reference
+
+Data Sources Used in AI Prompts:
+================================
+1. Basic Game Info: Teams, date, venue, neutral site flag
+2. Rankings: AP poll rankings for both teams
+3. Betting Lines: Spread, moneylines, total (from The Odds API)
+4. KenPom Analytics: AdjO, AdjD, AdjEM, tempo, SOS, luck
+5. Haslametrics: All-Play %, momentum, efficiency, quadrant records
+6. Prediction Markets: Polymarket/Kalshi prices and arbitrage signals
+
+AI Prompt Strategy:
+==================
+The prompt is structured to leverage AI strengths:
+- Provides raw data, asks for interpretation
+- Requests specific JSON output format for reliable parsing
+- Adjusts analysis instructions based on available data
+- When both KenPom and Haslametrics available, asks for cross-validation
+- Includes prediction market data when significant edges detected
+
+AI Response Parsing:
+===================
+AI responses are parsed with _extract_json_from_response() which tries:
+1. Direct JSON parse (if AI follows format exactly)
+2. JSON code block extraction (```json...```)
+3. Brace-counting JSON extraction (handles nested objects)
+4. Fallback to default "pass" recommendation
 
 SECURITY NOTES:
 - API keys are loaded from environment variables, never hardcoded
-- Error messages are sanitized to prevent key leakage
+- Error messages are sanitized to prevent key leakage via _sanitize_error_message()
 - API key values are never logged
+- Sensitive patterns (API keys, JWTs, emails) are detected and redacted
 """
 
 import os
@@ -172,7 +208,35 @@ def _extract_json_from_response(response_text: str) -> dict:
 
 
 def build_game_context(game_id: str) -> dict:
-    """Build context object for AI analysis."""
+    """
+    Build comprehensive context object for AI analysis.
+
+    This function aggregates data from ALL available sources to provide
+    the AI with maximum information for analysis. The more data available,
+    the better the analysis quality.
+
+    Data Aggregation Flow:
+    =====================
+    1. Fetch game record (teams, date, venue, conference info)
+    2. Fetch latest spread from spreads table
+    3. Fetch AP rankings for both teams
+    4. Fetch KenPom ratings (if available - requires subscription)
+    5. Fetch Haslametrics ratings (always available - FREE)
+    6. Fetch prediction market data (if games are matched)
+    7. Fetch arbitrage opportunities (if detected)
+
+    The resulting context dict contains all this data in a flat structure
+    that's easy to template into the AI prompt.
+
+    Args:
+        game_id: UUID of the game to analyze
+
+    Returns:
+        Dict with all available game context
+
+    Raises:
+        ValueError: If game_id doesn't exist in database
+    """
     game = get_game_by_id(game_id)
     if not game:
         raise ValueError(f"Game not found: {game_id}")
@@ -237,7 +301,43 @@ def build_game_context(game_id: str) -> dict:
 
 
 def build_analysis_prompt(context: dict) -> str:
-    """Build the analysis prompt for the AI."""
+    """
+    Build the analysis prompt for the AI.
+
+    Prompt Engineering Strategy:
+    ===========================
+    The prompt is carefully structured to elicit useful betting analysis:
+
+    1. Role Setting: "Expert college basketball betting analyst"
+       - Establishes domain expertise expectation
+       - Primes AI for betting-specific vocabulary
+
+    2. Data Presentation: Structured sections with clear labels
+       - MATCHUP: Teams, rankings, date, venue
+       - BETTING LINES: Spread, moneylines, total
+       - KENPOM ANALYTICS: Efficiency, tempo, luck (when available)
+       - HASLAMETRICS: All-Play %, momentum (when available)
+       - PREDICTION MARKETS: Market prices, arbitrage signals
+
+    3. Analysis Instructions: Vary based on available data
+       - Basic: Rankings, home court, line value
+       - With KenPom: Efficiency matchups, tempo implications
+       - With Haslametrics: Momentum, quadrant context
+       - With Both: Cross-validation, divergence detection
+
+    4. Output Format: Strict JSON structure
+       - recommended_bet: Specific bet type
+       - confidence_score: 0.0-1.0 scale
+       - key_factors: List of driving factors
+       - reasoning: Explanation for recommendation
+
+    5. Value Focus: "Only recommend bets with positive expected value"
+       - Encourages conservative recommendations
+       - "pass" option for unclear situations
+
+    Returns:
+        Complete prompt string ready for AI API call
+    """
     home_rank_str = f"#{context['home_rank']}" if context["home_rank"] else "Unranked"
     away_rank_str = f"#{context['away_rank']}" if context["away_rank"] else "Unranked"
 
@@ -253,7 +353,18 @@ def build_analysis_prompt(context: dict) -> str:
     if context["home_ml"] and context["away_ml"]:
         ml_str = f"ML: {context['home_team']} {context['home_ml']:+d} / {context['away_team']} {context['away_ml']:+d}"
 
-    # Build KenPom section if data is available
+    # ==========================================================================
+    # KenPom Section: Advanced efficiency-based analytics
+    # These metrics help the AI understand true team quality vs record
+    #
+    # Key metrics explained in prompt context:
+    # - AdjEM: Adjusted Efficiency Margin = AdjO - AdjD (main power rating)
+    # - AdjO: Points scored per 100 possessions (higher = better offense)
+    # - AdjD: Points allowed per 100 possessions (LOWER = better defense)
+    # - Tempo: Possessions per game (fast = more variance, more scoring)
+    # - Luck: Deviation from expected record (high luck = regression candidate)
+    # - SOS: Strength of schedule (contextualizes win-loss record)
+    # ==========================================================================
     kenpom_section = ""
     home_kp = context.get("home_kenpom")
     away_kp = context.get("away_kenpom")
@@ -285,7 +396,21 @@ def build_analysis_prompt(context: dict) -> str:
 - Record: {away_kp.get('wins', 0)}-{away_kp.get('losses', 0)}
 """
 
-    # Build Haslametrics section if data is available
+    # ==========================================================================
+    # Haslametrics Section: All-Play methodology and momentum metrics
+    # Provides complementary view to KenPom with different strengths:
+    #
+    # Key metrics explained in prompt context:
+    # - All-Play %: Win probability vs average D1 team (intuitive power rating)
+    # - Momentum (overall/O/D): Recent trend direction (-1 to +1 scale)
+    #   Positive momentum = team improving, valuable for finding value
+    # - Quadrant Records: Performance vs NET quadrants (Q1 = best opponents)
+    #   Strong Q1 records indicate true tournament quality
+    # - Last 5: Recent form indicator, useful for detecting streaks/slumps
+    #
+    # When both KenPom and Haslametrics available, AI is instructed to
+    # cross-validate: disagreement lowers confidence, agreement increases it
+    # ==========================================================================
     haslametrics_section = ""
     home_hasla = context.get("home_haslametrics")
     away_hasla = context.get("away_haslametrics")
@@ -319,7 +444,23 @@ def build_analysis_prompt(context: dict) -> str:
 - Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
 """
 
-    # Build prediction market section if data is available
+    # ==========================================================================
+    # Prediction Market Section: Polymarket and Kalshi data
+    # Provides "wisdom of crowds" signal complementary to sportsbooks
+    #
+    # Key concepts:
+    # - Prediction markets price events as probabilities (0-100%)
+    # - Sportsbooks use odds (-110, +150) which imply probabilities
+    # - When these diverge significantly, arbitrage may exist
+    #
+    # Arbitrage Detection:
+    # - Delta = difference between sportsbook implied prob and PM prob
+    # - Actionable threshold: >=10% delta
+    # - Large deltas suggest one market is mispriced
+    #
+    # Example: If sportsbook implies Duke 60% to cover but Polymarket
+    # prices Duke cover at 50%, there may be value on the other side
+    # ==========================================================================
     pm_section = ""
     prediction_markets = context.get("prediction_markets", [])
     arbitrage = context.get("arbitrage_opportunities", [])
@@ -351,7 +492,18 @@ def build_analysis_prompt(context: dict) -> str:
   - Actionable: {"YES" if arb.get('is_actionable') else "No"}
 """
 
-    # Build analysis considerations based on available data
+    # ==========================================================================
+    # Dynamic Analysis Instructions
+    # The AI is given different analytical frameworks based on what data
+    # is available. This ensures the AI focuses on relevant factors and
+    # doesn't hallucinate about missing data.
+    #
+    # Hierarchy of analysis depth:
+    # 1. Both KenPom + Haslametrics: Full cross-validation, highest quality
+    # 2. KenPom only: Efficiency-focused analysis
+    # 3. Haslametrics only: Momentum and All-Play % focused
+    # 4. Neither: Basic ranking/spread analysis (lowest quality)
+    # ==========================================================================
     analysis_points = """1. Ranking differential and what it implies about team quality
 2. Home court advantage (if applicable)
 3. Conference game dynamics (teams know each other well)
@@ -362,7 +514,9 @@ def build_analysis_prompt(context: dict) -> str:
     has_haslametrics = home_hasla or away_hasla
 
     if has_kenpom and has_haslametrics:
-        # Both analytics sources available - comprehensive analysis
+        # BEST CASE: Both analytics sources available
+        # AI can cross-validate between sources for highest confidence
+        # Disagreement between sources should lower confidence
         analysis_points = """1. Cross-validate KenPom AdjEM vs Haslametrics efficiency (look for agreement/disagreement)
 2. Momentum indicators from Haslametrics - is one team trending up/down?
 3. All-Play % comparison as baseline win probability estimate
@@ -372,6 +526,8 @@ def build_analysis_prompt(context: dict) -> str:
 7. Recent form (Last 5) vs season-long metrics
 8. Line value - does spread align with both models' expectations?"""
     elif has_kenpom:
+        # KenPom only: Focus on efficiency-based analysis
+        # Can estimate point differential from AdjEM difference
         analysis_points = """1. KenPom efficiency differentials (AdjO vs opponent AdjD matchups)
 2. Tempo implications (fast vs slow matchup, how it affects total)
 3. Strength of schedule context (are records inflated/deflated?)
@@ -379,6 +535,8 @@ def build_analysis_prompt(context: dict) -> str:
 5. Home court advantage (typically worth ~3.5 points)
 6. Line value - does the spread align with KenPom predicted margin?"""
     elif has_haslametrics:
+        # Haslametrics only: Focus on All-Play % and momentum
+        # Good for identifying trending teams
         analysis_points = """1. Haslametrics efficiency comparison and All-Play % difference
 2. Momentum indicators - which team is trending in the right direction?
 3. Recent form (Last 5) as indicator of current team quality

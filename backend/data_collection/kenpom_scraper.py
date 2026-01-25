@@ -1,11 +1,37 @@
 """
 KenPom Data Scraper
 
-Fetches advanced analytics from KenPom using kenpompy.
-Requires a KenPom subscription.
+Fetches advanced analytics from KenPom using kenpompy library.
+Requires a paid KenPom subscription ($20/year).
+
+KenPom Metrics Overview:
+========================
+KenPom (kenpom.com) is the gold standard for college basketball analytics.
+Created by Ken Pomeroy, it uses tempo-free statistics to evaluate teams.
+
+Key Metrics Collected:
+- AdjO (Adjusted Offensive Efficiency): Points scored per 100 possessions,
+  adjusted for opponent strength. Higher is better. Elite teams: 115+
+- AdjD (Adjusted Defensive Efficiency): Points allowed per 100 possessions,
+  adjusted for opponent strength. Lower is better. Elite teams: <95
+- AdjEM (Adjusted Efficiency Margin): AdjO - AdjD. The core power rating.
+  Top 25 teams typically have AdjEM > 15
+- AdjT (Adjusted Tempo): Possessions per 40 minutes, adjusted for opponent.
+  Shows pace preference. Slow (<65) vs Fast (>70)
+- Luck: Deviation from expected record based on efficiency margin.
+  Positive = winning more close games than expected (may regress)
+- SOS (Strength of Schedule): Schedule difficulty based on opponent efficiency
+
+How These Are Used in AI Analysis:
+==================================
+1. AdjEM differential predicts point spread (1 point per 1 AdjEM difference)
+2. Tempo matchups affect totals (fast vs fast = higher scoring)
+3. High luck values suggest regression (team may underperform expectations)
+4. SOS context: A 15-5 team with hard schedule > 18-2 team with weak schedule
 
 Usage:
     python -m backend.data_collection.kenpom_scraper
+    python -m backend.data_collection.kenpom_scraper 2025  # Specific season
 
 Environment variables:
     KENPOM_EMAIL - Your KenPom account email
@@ -48,11 +74,38 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
 def normalize_team_name(name: str) -> str:
-    """Normalize team name for matching with our database."""
+    """
+    Normalize KenPom team name for matching with our database.
+
+    KenPom uses specific naming conventions that differ from ESPN, The Odds API,
+    and other sources. This function maps KenPom names to our normalized format.
+
+    Normalization Process:
+    1. Check explicit name_map for known differences
+    2. Apply basic normalization: lowercase, remove punctuation, replace spaces
+
+    Common KenPom Naming Differences:
+    - Uses "Miami FL" instead of "Miami"
+    - Uses full names like "Connecticut" not "UConn"
+    - Inconsistent "St." vs "Saint" usage
+
+    Args:
+        name: Team name as it appears on KenPom
+
+    Returns:
+        Normalized team name matching our teams.normalized_name column
+
+    Example:
+        >>> normalize_team_name("North Carolina")
+        'north-carolina'
+        >>> normalize_team_name("UConn")
+        'connecticut'
+    """
     if not name:
         return ""
 
-    # KenPom uses specific naming conventions
+    # Explicit mappings for KenPom-specific naming conventions
+    # Keys: KenPom names, Values: Our normalized_name format
     name_map = {
         "North Carolina": "north-carolina",
         "NC State": "nc-state",
@@ -106,24 +159,50 @@ def normalize_team_name(name: str) -> str:
 
 
 def get_team_id(team_name: str) -> Optional[str]:
-    """Get team ID from our database by matching normalized name."""
+    """
+    Get team UUID from our database by matching normalized name.
+
+    Implements a multi-stage matching strategy to handle naming variations:
+
+    Matching Strategy (in order):
+    1. Exact match on normalized_name
+    2. Partial match (ILIKE %name%) - handles prefixes/suffixes
+    3. Without "-state" suffix - handles "Ohio" vs "Ohio State" ambiguity
+
+    This fuzzy matching is necessary because:
+    - KenPom names don't always match our ESPN-sourced team names
+    - Some teams have multiple common names (e.g., "Ole Miss" vs "Mississippi")
+    - State schools are inconsistently named across sources
+
+    Args:
+        team_name: Team name from KenPom
+
+    Returns:
+        Team UUID if matched, None if no match found
+
+    Note: Unmatched teams are logged and counted. If too many teams fail to match,
+    check the name_map in normalize_team_name() and add missing mappings.
+    """
     normalized = normalize_team_name(team_name)
     if not normalized:
         return None
 
-    # Try exact match
+    # Strategy 1: Exact match on normalized_name column
+    # This is the most reliable - uses our explicit normalization
     result = supabase.table("teams").select("id").eq("normalized_name", normalized).execute()
     if result.data:
         return result.data[0]["id"]
 
-    # Try partial match
+    # Strategy 2: Partial match using ILIKE (case-insensitive)
+    # Catches cases where normalization differs slightly
     result = supabase.table("teams").select("id, normalized_name").ilike(
         "normalized_name", f"%{normalized}%"
     ).execute()
     if result.data:
         return result.data[0]["id"]
 
-    # Try without state suffix
+    # Strategy 3: Try without "-state" suffix
+    # Handles ambiguous cases like searching "ohio" matching "ohio-state"
     if "-state" in normalized:
         base_name = normalized.replace("-state", "")
         result = supabase.table("teams").select("id").ilike(
@@ -139,11 +218,46 @@ def _fetch_kenpom_ratings_uncached(season: int = 2025) -> Optional[pd.DataFrame]
     """
     Internal function to fetch KenPom ratings without caching.
 
+    Technical Implementation:
+    ========================
+    Uses the kenpompy library which automates browser login to kenpom.com.
+    KenPom doesn't have a public API, so we must scrape the website.
+
+    The kenpompy library uses Selenium WebDriver to:
+    1. Open a browser (Chrome/Chromium)
+    2. Navigate to kenpom.com login page
+    3. Enter credentials and authenticate
+    4. Navigate to the ratings page
+    5. Scrape the HTML table into a pandas DataFrame
+    6. Close the browser
+
+    get_pomeroy_ratings() specifically scrapes the main efficiency ratings table,
+    which contains the core metrics (AdjEM, AdjO, AdjD, AdjT, Luck, SOS).
+
     Args:
         season: The season year (e.g., 2025 for 2024-25 season)
 
     Returns:
-        DataFrame with KenPom ratings or None if failed
+        DataFrame with columns like:
+        - Rk: Overall KenPom ranking
+        - Team: Team name
+        - Conf: Conference
+        - W-L: Win-Loss record
+        - AdjEM: Adjusted Efficiency Margin (main power rating)
+        - AdjO, AdjO Rank: Adjusted Offense
+        - AdjD, AdjD Rank: Adjusted Defense
+        - AdjT, AdjT Rank: Adjusted Tempo
+        - Luck, Luck Rank: Luck factor
+        - SOS AdjEM, SOS AdjEM Rank: Strength of Schedule
+
+    Note: Column names may vary between kenpompy versions. The store_kenpom_ratings()
+    function handles multiple possible column name formats.
+
+    Railway Deployment Note:
+    =======================
+    This function requires Chrome/Chromium installed. On Railway, you may need to:
+    1. Use a Chrome buildpack, OR
+    2. Run KenPom refresh locally and let other scrapers run on Railway
     """
     if not KENPOM_EMAIL or not KENPOM_PASSWORD:
         print("ERROR: KENPOM_EMAIL and KENPOM_PASSWORD must be set")
@@ -154,16 +268,21 @@ def _fetch_kenpom_ratings_uncached(season: int = 2025) -> Optional[pd.DataFrame]
         import kenpompy.misc as kp
 
         print(f"Logging into KenPom as {KENPOM_EMAIL}...")
+        # login() opens a Selenium-controlled browser and authenticates
+        # Returns a browser object that we pass to subsequent kenpompy functions
         browser = login(KENPOM_EMAIL, KENPOM_PASSWORD)
 
         print(f"Fetching Pomeroy ratings for {season}...")
-        # get_pomeroy_ratings returns the main ratings table with rank, AdjEM, AdjO, AdjD, etc.
+        # get_pomeroy_ratings scrapes the main ratings table at kenpom.com
+        # This is the "efficiency ratings" page, not the detailed team pages
         ratings = kp.get_pomeroy_ratings(browser, season=str(season))
 
         print(f"Fetched {len(ratings)} team ratings")
         print(f"Columns available: {list(ratings.columns)}")
         if len(ratings) > 0:
             print(f"Sample row: {ratings.iloc[0].to_dict()}")
+
+        # Always close the browser to free resources
         browser.close()
 
         return ratings
@@ -234,18 +353,49 @@ def fetch_kenpom_fourfactors(season: int = 2025) -> Optional[pd.DataFrame]:
 
 def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
     """
-    Store KenPom ratings in Supabase.
+    Store KenPom ratings in Supabase database.
+
+    Data Transformation Process:
+    ===========================
+    1. Match each KenPom team name to our teams table
+    2. Parse the various column formats (kenpompy versions differ)
+    3. Extract and convert numeric values safely
+    4. Insert into kenpom_ratings table
+
+    Column Name Handling:
+    ====================
+    kenpompy's output column names have changed across versions.
+    The get_col() helper tries multiple possible names for each metric:
+    - "AdjO" vs "AdjO." vs "AdjOE"
+    - "AdjO Rank" vs "AdjO.1" vs "AdjO Rk"
+
+    This flexibility ensures we can handle kenpompy updates without code changes.
+
+    Database Schema (kenpom_ratings table):
+    ======================================
+    - team_id: FK to teams.id
+    - season: Year (e.g., 2025)
+    - captured_date: Date when data was fetched
+    - rank: Overall KenPom ranking (1-362)
+    - adj_efficiency_margin: AdjO - AdjD (core power rating)
+    - adj_offense/adj_offense_rank: Offensive efficiency
+    - adj_defense/adj_defense_rank: Defensive efficiency (lower is better)
+    - adj_tempo/adj_tempo_rank: Pace of play
+    - luck/luck_rank: Performance vs expectation
+    - sos_adj_em: Strength of schedule
+    - wins/losses: Season record
 
     Args:
-        df: DataFrame from kenpompy
+        df: DataFrame from kenpompy's get_pomeroy_ratings()
         season: Season year
 
     Returns:
-        Dict with counts of inserted/skipped/errors
+        Dict with counts: {inserted, skipped, errors}
     """
     print(f"\n=== Storing KenPom Ratings ===")
 
     # Debug: Print actual column names from kenpompy
+    # This helps diagnose issues when kenpompy updates change column names
     print(f"DataFrame columns: {list(df.columns)}")
     if len(df) > 0:
         print(f"Sample row: {df.iloc[0].to_dict()}")
@@ -261,16 +411,13 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
 
             if not team_id:
                 skipped += 1
+                # Only log first 5 unmatched teams to avoid log spam
                 if skipped <= 5:
                     print(f"  Could not match team: {team_name}")
                 continue
 
-            # Parse the data - column names from get_pomeroy_ratings
-            # Typical columns: Rk, Team, Conf, W-L, AdjEM, AdjO, AdjO Rank, AdjD, AdjD Rank,
-            # AdjT, AdjT Rank, Luck, Luck Rank, SOS AdjEM, SOS AdjEM Rank, OppO, OppO Rank,
-            # OppD, OppD Rank, NCSOS AdjEM, NCSOS AdjEM Rank
-
-            # Try multiple possible column name formats
+            # Column name helper: tries multiple possible names for robustness
+            # kenpompy versions use different column naming conventions
             def get_col(row, *names):
                 """Try multiple column names and return first match."""
                 for name in names:
@@ -279,31 +426,42 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
                         return val
                 return None
 
-            # Parse W-L record
+            # Parse W-L record (format: "15-5" or similar)
             wl = str(get_col(row, "W-L", "W-L.1", "Record") or "0-0")
             wins = safe_int(wl.split("-")[0]) if "-" in wl else 0
             losses = safe_int(wl.split("-")[-1]) if "-" in wl else 0
 
+            # Build rating data dict with all possible column name variations
+            # Each get_col call tries multiple column names in priority order
             rating_data = {
                 "team_id": team_id,
                 "season": season,
                 "captured_date": datetime.now().date().isoformat(),
+                # Core ranking
                 "rank": safe_int(get_col(row, "Rk", "Rank", "Rk.")),
+                # Efficiency Margin = AdjO - AdjD (main power rating)
                 "adj_efficiency_margin": safe_float(get_col(row, "AdjEM", "AdjEM.", "NetRtg")),
+                # Adjusted Offense: points per 100 possessions, adjusted for opponent
                 "adj_offense": safe_float(get_col(row, "AdjO", "AdjO.", "AdjOE")),
                 "adj_offense_rank": safe_int(get_col(row, "AdjO Rank", "AdjO.1", "AdjO Rk")),
+                # Adjusted Defense: points allowed per 100 possessions (lower = better)
                 "adj_defense": safe_float(get_col(row, "AdjD", "AdjD.", "AdjDE")),
                 "adj_defense_rank": safe_int(get_col(row, "AdjD Rank", "AdjD.1", "AdjD Rk")),
+                # Adjusted Tempo: possessions per 40 minutes
                 "adj_tempo": safe_float(get_col(row, "AdjT", "AdjT.", "AdjTempo")),
                 "adj_tempo_rank": safe_int(get_col(row, "AdjT Rank", "AdjT.1", "AdjT Rk")),
+                # Luck: deviation from expected record (high = due for regression)
                 "luck": safe_float(get_col(row, "Luck", "Luck.")),
                 "luck_rank": safe_int(get_col(row, "Luck Rank", "Luck.1", "Luck Rk")),
+                # Strength of Schedule based on opponent efficiency margins
                 "sos_adj_em": safe_float(get_col(row, "SOS AdjEM", "Strength of Schedule AdjEM", "SOS")),
                 "sos_adj_em_rank": safe_int(get_col(row, "SOS AdjEM Rank", "SOS AdjEM.1", "SOS Rk")),
+                # Average opponent offensive/defensive strength
                 "sos_opp_offense": safe_float(get_col(row, "OppO", "SOS OppO", "OppO.")),
                 "sos_opp_offense_rank": safe_int(get_col(row, "OppO Rank", "OppO.1", "OppO Rk")),
                 "sos_opp_defense": safe_float(get_col(row, "OppD", "SOS OppD", "OppD.")),
                 "sos_opp_defense_rank": safe_int(get_col(row, "OppD Rank", "OppD.1", "OppD Rk")),
+                # Non-conference SOS (useful for evaluating early-season performance)
                 "ncsos_adj_em": safe_float(get_col(row, "NCSOS AdjEM", "NCSOS", "NCSOS AdjEM.")),
                 "ncsos_adj_em_rank": safe_int(get_col(row, "NCSOS AdjEM Rank", "NCSOS.1", "NCSOS Rk")),
                 "wins": wins,
@@ -311,13 +469,14 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
                 "conference": get_col(row, "Conf", "Conference"),
             }
 
-            # Remove None values
+            # Remove None values before insert (Supabase doesn't like explicit nulls for optional columns)
             rating_data = {k: v for k, v in rating_data.items() if v is not None}
 
-            # Insert into Supabase
+            # Insert into Supabase (not upsert - we want historical snapshots)
             supabase.table("kenpom_ratings").insert(rating_data).execute()
             inserted += 1
 
+            # Progress indicator for long-running inserts
             if inserted % 50 == 0:
                 print(f"  Inserted {inserted} ratings...")
 

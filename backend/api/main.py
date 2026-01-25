@@ -1,10 +1,54 @@
 """
 Conference Contrarian API
 
-FastAPI backend for serving predictions and AI analysis.
+FastAPI backend serving AI-powered NCAA basketball betting analysis and predictions.
+
+This module provides the main API endpoints for:
+- Game data retrieval (today's games, upcoming games, game details)
+- AI-powered analysis using Claude and Grok LLMs
+- Betting predictions with confidence tiers and edge detection
+- Advanced analytics from KenPom and Haslametrics
+- Prediction market data and arbitrage detection
+- Season performance statistics and rankings
+
+Architecture:
+    - FastAPI with Pydantic validation for all request/response models
+    - Rate limiting via slowapi (5 req/min for AI, 30 req/min for standard)
+    - CORS configured for specific trusted origins only
+    - Supabase PostgreSQL database via supabase-py client
+    - Claude (Anthropic) and Grok (xAI) for AI analysis
+
+Security Features:
+    - Input validation on all endpoints with Pydantic models
+    - UUID format validation for all ID parameters
+    - CORS origin validation (rejects wildcards)
+    - Rate limiting to prevent abuse
+    - Error messages sanitized to prevent information leakage
+    - API keys validated at startup without exposing values
 
 Usage:
-    uvicorn backend.api.main:app --reload
+    # Development
+    uvicorn backend.api.main:app --reload --host 0.0.0.0 --port 8000
+
+    # Production (via Procfile on Railway)
+    gunicorn backend.api.main:app -k uvicorn.workers.UvicornWorker
+
+Environment Variables Required:
+    SUPABASE_URL: PostgreSQL database URL
+    SUPABASE_SERVICE_KEY: Supabase service role key (backend only)
+    ANTHROPIC_API_KEY: Claude API key for AI analysis
+    ALLOWED_ORIGINS: Comma-separated list of allowed CORS origins
+
+Environment Variables Optional:
+    GROK_API_KEY: Grok API key for secondary AI analysis
+    ODDS_API_KEY: The Odds API key for betting lines
+    KENPOM_EMAIL/KENPOM_PASSWORD: KenPom subscription credentials
+    REFRESH_API_KEY: Authentication for refresh endpoint
+
+API Documentation:
+    Swagger UI: /docs
+    ReDoc: /redoc
+    OpenAPI JSON: /openapi.json
 """
 
 import os
@@ -228,47 +272,80 @@ def validate_date_string(value: str, field_name: str = "date") -> date:
 
 
 class PredictRequest(BaseModel):
-    """Request model for prediction endpoint."""
+    """
+    Request model for the /predict endpoint.
+
+    Supports two modes of operation:
+    1. Database lookup: Provide game_id to fetch game data from Supabase
+    2. Ad-hoc prediction: Provide team names and optional spread/ranking info
+
+    Example (database lookup):
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000"
+        }
+
+    Example (ad-hoc prediction):
+        {
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "spread": -5.5,
+            "is_conference_game": true,
+            "home_rank": 5,
+            "away_rank": null
+        }
+
+    Business Logic:
+        - If game_id provided, fetches game from database with latest spread
+        - If prediction exists in database, returns cached prediction
+        - Otherwise, calculates prediction using spread-based heuristics
+        - Conference games have adjusted home court advantage (~3-4 points)
+        - Large spreads (>10 points) reduce home cover probability
+        - Confidence tiers: high (>4% edge), medium (>2% edge), low (<2%)
+    """
     game_id: Optional[str] = Field(
         default=None,
-        description="UUID of existing game in database"
+        description="UUID of existing game in database. If provided, fetches game data and existing predictions."
     )
     # Or provide matchup details
     home_team: Optional[str] = Field(
         default=None,
         min_length=1,
         max_length=100,
-        description="Home team name"
+        description="Home team name (e.g., 'Duke', 'North Carolina'). Required if game_id not provided."
     )
     away_team: Optional[str] = Field(
         default=None,
         min_length=1,
         max_length=100,
-        description="Away team name"
+        description="Away team name. Required if game_id not provided."
     )
     spread: Optional[float] = Field(
         default=None,
         ge=-50.0,
         le=50.0,
-        description="Point spread (home team perspective)"
+        description="Point spread from home team perspective. Negative = home favored (e.g., -5.5 means home favored by 5.5)."
     )
-    is_conference_game: Optional[bool] = Field(default=False)
+    is_conference_game: Optional[bool] = Field(
+        default=False,
+        description="Whether this is a conference matchup. Conference games have different home court dynamics."
+    )
     home_rank: Optional[int] = Field(
         default=None,
         ge=1,
         le=100,
-        description="Home team AP ranking"
+        description="Home team AP ranking (1-25). Null/omit if unranked."
     )
     away_rank: Optional[int] = Field(
         default=None,
         ge=1,
         le=100,
-        description="Away team AP ranking"
+        description="Away team AP ranking (1-25). Null/omit if unranked."
     )
 
     @field_validator('game_id')
     @classmethod
     def validate_game_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate game_id is a properly formatted UUID."""
         if v is not None and not UUID_PATTERN.match(v):
             raise ValueError('game_id must be a valid UUID')
         return v
@@ -282,71 +359,198 @@ class PredictRequest(BaseModel):
 
 
 class PredictResponse(BaseModel):
-    """Response model for prediction endpoint."""
-    game_id: Optional[str]
-    home_team: str
-    away_team: str
-    home_cover_prob: float = Field(ge=0.0, le=1.0)
-    away_cover_prob: float = Field(ge=0.0, le=1.0)
-    confidence: str
-    recommended_bet: str
-    edge_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0)
-    reasoning: Optional[str]
+    """
+    Response model for the /predict endpoint.
+
+    Contains prediction probabilities, confidence tier, and betting recommendation.
+
+    Example Response:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "home_cover_prob": 0.54,
+            "away_cover_prob": 0.46,
+            "confidence": "medium",
+            "recommended_bet": "home_spread",
+            "edge_pct": 2.0,
+            "reasoning": "Home team has slight edge due to home court advantage in conference play."
+        }
+
+    Fields:
+        home_cover_prob/away_cover_prob: Probabilities that sum to 1.0
+        confidence: "high" (>4% edge), "medium" (>2%), or "low" (<2%)
+        recommended_bet: "home_spread", "away_spread", or "pass"
+        edge_pct: Percentage edge over fair odds (null if no edge)
+    """
+    game_id: Optional[str] = Field(description="UUID of the game (null for ad-hoc predictions)")
+    home_team: str = Field(description="Home team name")
+    away_team: str = Field(description="Away team name")
+    home_cover_prob: float = Field(ge=0.0, le=1.0, description="Probability home team covers the spread (0.0-1.0)")
+    away_cover_prob: float = Field(ge=0.0, le=1.0, description="Probability away team covers (1 - home_cover_prob)")
+    confidence: str = Field(description="Confidence tier: 'high', 'medium', or 'low'")
+    recommended_bet: str = Field(description="Betting recommendation: 'home_spread', 'away_spread', or 'pass'")
+    edge_pct: Optional[float] = Field(default=None, ge=0.0, le=100.0, description="Estimated edge percentage over fair odds")
+    reasoning: Optional[str] = Field(description="Brief explanation of the recommendation")
 
 
 class AIAnalysisRequest(BaseModel):
-    """Request model for AI analysis endpoint."""
+    """
+    Request model for the /ai-analysis endpoint.
+
+    Triggers an AI-powered analysis of a specific game using either Claude or Grok.
+    The AI receives comprehensive context including:
+    - Team rankings and conference information
+    - Current betting lines (spread, moneyline, total)
+    - KenPom advanced analytics (if available)
+    - Haslametrics data (if available)
+    - Prediction market data and arbitrage signals
+
+    Example Request:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "provider": "claude"
+        }
+
+    Rate Limit: 5 requests per minute per IP address
+
+    Business Logic:
+        - Analysis is saved to database for caching/historical reference
+        - If both KenPom and Haslametrics data available, AI cross-validates
+        - Prediction market data influences confidence when significant edges detected
+        - Response includes actionable betting recommendation with confidence score
+    """
     game_id: str = Field(
         ...,
-        description="UUID of game to analyze"
+        description="UUID of the game to analyze. Must exist in the games table."
     )
     provider: Literal["claude", "grok"] = Field(
         default="claude",
-        description="AI provider to use for analysis"
+        description="AI provider: 'claude' (Anthropic Claude Sonnet 4) or 'grok' (xAI Grok-3)"
     )
 
     @field_validator('game_id')
     @classmethod
     def validate_game_id(cls, v: str) -> str:
+        """Validate game_id is a properly formatted UUID."""
         if not UUID_PATTERN.match(v):
             raise ValueError('game_id must be a valid UUID')
         return v
 
 
 class AIAnalysisResponse(BaseModel):
-    game_id: str
-    provider: str
-    recommended_bet: str
-    confidence_score: float
-    key_factors: list[str]
-    reasoning: str
-    created_at: Optional[str] = None
+    """
+    Response model for the /ai-analysis endpoint.
+
+    Contains the AI's betting recommendation with supporting analysis.
+
+    Example Response:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "provider": "claude",
+            "recommended_bet": "away_spread",
+            "confidence_score": 0.72,
+            "key_factors": [
+                "Duke's KenPom AdjD ranks #3, UNC's offense struggles vs elite defenses",
+                "Haslametrics momentum shows UNC trending down (-0.3 last 5 games)",
+                "Historical data: Top 5 teams cover at only 48% as road favorites"
+            ],
+            "reasoning": "Despite Duke being ranked higher, UNC at home in a rivalry game with Duke coming off a tough road stretch presents value on the underdog.",
+            "created_at": "2025-01-25T14:30:00Z"
+        }
+
+    Possible recommended_bet values:
+        - "home_spread": Bet home team to cover the spread
+        - "away_spread": Bet away team to cover the spread
+        - "home_ml": Bet home team moneyline
+        - "away_ml": Bet away team moneyline
+        - "over": Bet the over on total points
+        - "under": Bet the under on total points
+        - "pass": No recommended bet (insufficient edge)
+    """
+    game_id: str = Field(description="UUID of the analyzed game")
+    provider: str = Field(description="AI provider used: 'claude' or 'grok'")
+    recommended_bet: str = Field(description="Betting recommendation (see docstring for possible values)")
+    confidence_score: float = Field(ge=0.0, le=1.0, description="AI confidence (0.5 = coin flip, 0.8+ = high conviction)")
+    key_factors: list[str] = Field(description="3-5 key factors driving the recommendation")
+    reasoning: str = Field(description="2-3 sentence explanation of the analysis")
+    created_at: Optional[str] = Field(default=None, description="ISO timestamp when analysis was created")
 
 
 class StatsResponse(BaseModel):
-    season: int
-    total_bets: int
-    wins: int
-    losses: int
-    pushes: int
-    win_pct: float
-    units_wagered: float
-    units_won: float
-    roi_pct: float
+    """
+    Response model for the /stats endpoint.
+
+    Contains season performance statistics for bet tracking.
+
+    Example Response:
+        {
+            "season": 2025,
+            "total_bets": 150,
+            "wins": 85,
+            "losses": 62,
+            "pushes": 3,
+            "win_pct": 57.82,
+            "units_wagered": 150.0,
+            "units_won": 12.5,
+            "roi_pct": 8.33
+        }
+
+    Note: Assumes -110 juice on all bets (standard sportsbook odds).
+    Win percentage of 52.4% is breakeven at -110 odds.
+    """
+    season: int = Field(description="Season year (e.g., 2025 for 2024-25 season)")
+    total_bets: int = Field(description="Total number of graded bets")
+    wins: int = Field(description="Number of winning bets")
+    losses: int = Field(description="Number of losing bets")
+    pushes: int = Field(description="Number of pushed bets (ties)")
+    win_pct: float = Field(description="Win percentage (wins / (wins + losses) * 100)")
+    units_wagered: float = Field(description="Total units wagered")
+    units_won: float = Field(description="Net units won (can be negative)")
+    roi_pct: float = Field(description="Return on investment percentage")
 
 
 class GameResponse(BaseModel):
-    """Response model for game detail endpoint."""
-    id: str
-    date: str
-    home_team: str
-    away_team: str
-    home_rank: Optional[int] = Field(default=None, ge=1, le=100)
-    away_rank: Optional[int] = Field(default=None, ge=1, le=100)
-    home_spread: Optional[float] = Field(default=None, ge=-50.0, le=50.0)
-    is_conference_game: bool
-    prediction: Optional[dict] = None
-    ai_analyses: list[dict] = []
+    """
+    Response model for the /games/{game_id} endpoint.
+
+    Contains comprehensive game details including predictions and AI analyses.
+
+    Example Response:
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "date": "2025-01-25",
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "home_rank": 5,
+            "away_rank": null,
+            "home_spread": -5.5,
+            "is_conference_game": true,
+            "prediction": {
+                "predicted_home_cover_prob": 0.54,
+                "confidence_tier": "medium",
+                "recommended_bet": "home_spread"
+            },
+            "ai_analyses": [
+                {
+                    "ai_provider": "claude",
+                    "recommended_bet": "away_spread",
+                    "confidence_score": 0.68,
+                    "created_at": "2025-01-25T10:00:00Z"
+                }
+            ]
+        }
+    """
+    id: str = Field(description="Game UUID")
+    date: str = Field(description="Game date in ISO format (YYYY-MM-DD)")
+    home_team: str = Field(description="Home team name")
+    away_team: str = Field(description="Away team name")
+    home_rank: Optional[int] = Field(default=None, ge=1, le=100, description="Home team AP ranking (null if unranked)")
+    away_rank: Optional[int] = Field(default=None, ge=1, le=100, description="Away team AP ranking (null if unranked)")
+    home_spread: Optional[float] = Field(default=None, ge=-50.0, le=50.0, description="Point spread (home perspective)")
+    is_conference_game: bool = Field(description="Whether teams are in the same conference")
+    prediction: Optional[dict] = Field(default=None, description="Model prediction data (if exists)")
+    ai_analyses: list[dict] = Field(default=[], description="List of AI analyses for this game")
 
 
 # ============================================
@@ -459,9 +663,25 @@ GameIdPath = Annotated[
 # ============================================
 
 
-@app.get("/")
+@app.get("/", tags=["Health"])
 def root():
-    """API info and health check."""
+    """
+    Root endpoint - API info and basic health check.
+
+    Returns basic API information and current status. Use /health for detailed
+    health check with service configuration status.
+
+    Returns:
+        dict: API name, version, status, and current timestamp
+
+    Example Response:
+        {
+            "name": "Conference Contrarian API",
+            "version": "1.0.0",
+            "status": "running",
+            "timestamp": "2025-01-25T14:30:00.000000"
+        }
+    """
     return {
         "name": "Conference Contrarian API",
         "version": "1.0.0",
@@ -470,13 +690,39 @@ def root():
     }
 
 
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 def health():
     """
-    Detailed health check.
+    Detailed health check with service configuration status.
+
+    Returns configuration status for all integrated services without exposing
+    actual API keys or credentials. Used for monitoring and debugging.
 
     SECURITY: Returns only boolean configuration status, never actual key values.
     Uses secrets_validator to check configuration validity without exposing secrets.
+
+    Returns:
+        dict: Health status with service configuration flags
+
+    Example Response:
+        {
+            "status": "healthy",
+            "timestamp": "2025-01-25T14:30:00.000000",
+            "supabase_configured": true,
+            "claude_configured": true,
+            "grok_configured": true,
+            "kalshi_configured": false,
+            "secrets_valid": true,
+            "missing_recommended": []
+        }
+
+    Service Status Flags:
+        - supabase_configured: Database connection available
+        - claude_configured: Anthropic API key valid
+        - grok_configured: xAI API key valid
+        - kalshi_configured: Kalshi prediction market API configured
+        - secrets_valid: All required secrets present
+        - missing_recommended: List of optional but recommended secrets
     """
     # Check AI provider availability using validated checks
     claude_available, grok_available = check_ai_provider_available()
@@ -507,19 +753,52 @@ def health():
     }
 
 
-@app.post("/predict", response_model=PredictResponse)
+@app.post("/predict", response_model=PredictResponse, tags=["Predictions"])
 @limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
 def predict(request: Request, predict_request: PredictRequest):
     """
-    Get prediction for a game.
+    Generate a betting prediction for a game.
 
-    Can provide either:
-    - game_id: UUID of an existing game in the database
-    - Or: home_team, away_team, spread, etc. for ad-hoc prediction
+    Supports two modes:
+    1. **Database Lookup**: Provide `game_id` to fetch game from database
+    2. **Ad-hoc Prediction**: Provide team names and optional context
 
-    Request body validated by PredictRequest model.
+    The prediction algorithm uses spread-based heuristics with adjustments for:
+    - Home court advantage (base ~52% for home team)
+    - Conference game dynamics (stronger home edge)
+    - Spread magnitude (large favorites cover less often)
+    - Ranking differentials
 
-    Rate limited: 5 requests per minute per IP (AI endpoint).
+    Args:
+        predict_request: PredictRequest with game_id or team details
+
+    Returns:
+        PredictResponse: Prediction with probabilities and recommendation
+
+    Raises:
+        404 Not Found: If game_id provided but game doesn't exist
+        422 Validation Error: If request body invalid
+
+    Rate Limit: 5 requests per minute per IP
+
+    Example Request (database lookup):
+        POST /predict
+        {"game_id": "123e4567-e89b-12d3-a456-426614174000"}
+
+    Example Request (ad-hoc):
+        POST /predict
+        {
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "spread": -5.5,
+            "is_conference_game": true
+        }
+
+    Business Logic:
+        - Checks for existing prediction in database first
+        - Falls back to heuristic calculation if no prediction exists
+        - Confidence tiers: high (>4% edge), medium (>2%), low (<2%)
+        - Recommends "pass" when no clear edge detected
     """
     if predict_request.game_id:
         # Fetch game from database
@@ -653,21 +932,78 @@ def predict(request: Request, predict_request: PredictRequest):
     # If we reach here, validation already passed
 
 
-@app.get("/ai-analysis")
+@app.get("/ai-analysis", tags=["AI Analysis"])
 def ai_analysis_get():
-    """Debug endpoint - if you see this, the request was GET not POST."""
+    """
+    Debug endpoint for incorrect GET requests to /ai-analysis.
+
+    The /ai-analysis endpoint requires POST method. This GET handler exists
+    to provide a helpful error message when the wrong method is used.
+
+    Returns:
+        dict: Error message indicating POST is required
+    """
     return {"error": "This endpoint requires POST method", "method_received": "GET"}
 
 
-@app.post("/ai-analysis", response_model=AIAnalysisResponse)
+@app.post("/ai-analysis", response_model=AIAnalysisResponse, tags=["AI Analysis"])
 @limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
 def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
     """
-    Generate AI analysis for a game.
+    Generate AI-powered analysis for a game using Claude or Grok.
 
-    Uses Claude or Grok to analyze the matchup and provide betting recommendations.
+    This endpoint triggers a comprehensive AI analysis of the specified game,
+    incorporating all available data:
+    - Team rankings and conference information
+    - Current betting lines (spread, moneyline, total)
+    - KenPom advanced analytics (AdjO, AdjD, tempo, SOS, luck)
+    - Haslametrics data (All-Play %, momentum, efficiency)
+    - Prediction market data and arbitrage signals
 
-    Rate limited: 5 requests per minute per IP (AI endpoint).
+    The AI provides a structured betting recommendation with confidence score
+    and detailed reasoning. Analysis is saved to database for caching.
+
+    Args:
+        analysis_request: AIAnalysisRequest with game_id and provider
+
+    Returns:
+        AIAnalysisResponse: AI recommendation with key factors and reasoning
+
+    Raises:
+        404 Not Found: If game doesn't exist
+        422 Validation Error: If request body invalid
+        503 Service Unavailable: If AI provider not configured or unavailable
+
+    Rate Limit: 5 requests per minute per IP
+
+    Example Request:
+        POST /ai-analysis
+        {"game_id": "123e4567-e89b-12d3-a456-426614174000", "provider": "claude"}
+
+    Example Response:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "provider": "claude",
+            "recommended_bet": "away_spread",
+            "confidence_score": 0.72,
+            "key_factors": [
+                "KenPom efficiency differential favors underdog by 2 points",
+                "Haslametrics momentum shows away team trending up",
+                "Historical: Top 5 favorites cover only 48% in conference road games"
+            ],
+            "reasoning": "Despite the ranking, value exists on the underdog...",
+            "created_at": "2025-01-25T14:30:00Z"
+        }
+
+    AI Providers:
+        - claude: Anthropic Claude Sonnet 4 (primary, most thorough analysis)
+        - grok: xAI Grok-3 (alternative perspective, good for comparison)
+
+    Business Logic:
+        - Builds comprehensive context from all data sources
+        - When both KenPom and Haslametrics available, AI cross-validates
+        - Prediction market data influences confidence on large deltas
+        - Analysis saved to ai_analysis table for historical reference
     """
     try:
         result = analyze_game(analysis_request.game_id, analysis_request.provider)
@@ -698,16 +1034,54 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         )
 
 
-@app.get("/today")
+@app.get("/today", tags=["Games"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_today(request: Request):
     """
-    Get today's games with predictions and analysis.
+    Get today's games with predictions, spreads, and analysis flags.
+
+    Returns all games scheduled for today (in US Eastern time) with
+    flattened team names, betting lines, predictions, and indicators
+    for available AI analysis and prediction market data.
 
     Uses Eastern time for "today" since college basketball games
     are scheduled and displayed in US Eastern time.
 
-    Rate limited: 30 requests per minute per IP.
+    Returns:
+        dict: Date, game count, and list of games
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Response:
+        {
+            "date": "2025-01-25",
+            "game_count": 42,
+            "games": [
+                {
+                    "id": "123e4567-e89b-12d3-a456-426614174000",
+                    "date": "2025-01-25",
+                    "tip_time": "19:00:00",
+                    "home_team": "Duke",
+                    "away_team": "North Carolina",
+                    "home_spread": -5.5,
+                    "home_ml": -210,
+                    "away_ml": 175,
+                    "over_under": 142.5,
+                    "predicted_home_cover_prob": 0.54,
+                    "confidence_tier": "medium",
+                    "recommended_bet": "home_spread",
+                    "has_ai_analysis": true,
+                    "has_prediction_market": false
+                }
+            ]
+        }
+
+    Data Source: Uses today_games Supabase view which joins:
+        - games table (schedule, teams)
+        - spreads table (latest betting lines)
+        - predictions table (model predictions)
+        - ai_analysis table (AI analysis flag)
+        - prediction_markets table (PM data flag)
     """
     try:
         # Use Eastern time for consistent date display
@@ -729,7 +1103,7 @@ def get_today(request: Request):
         }
 
 
-@app.get("/games")
+@app.get("/games", tags=["Games"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_games(
     request: Request,
@@ -763,19 +1137,45 @@ def get_games(
     ] = 20
 ):
     """
-    Get upcoming games with pagination.
+    Get upcoming games with pagination support.
 
-    Returns games in the same flat format as the today_games view,
-    with home_team/away_team as strings (not nested objects).
+    Returns games in the same flat format as /today, with team names as
+    strings (not nested objects). Supports date range filtering and pagination.
 
-    Query params:
-    - start_date: ISO date string (default: today)
-    - end_date: ISO date string (default: start + days)
-    - days: Number of days to fetch (default: 7, max: 30)
-    - page: Page number, 1-indexed (default: 1)
-    - page_size: Number of games per page (default: 20, max: 50)
+    Query Parameters:
+        start_date: Start date (default: today in Eastern time)
+        end_date: End date (default: start_date + days)
+        days: Number of days to fetch (default: 7, max: 30)
+        page: Page number, 1-indexed (default: 1)
+        page_size: Results per page (default: 20, max: 50)
 
-    Rate limited: 30 requests per minute per IP.
+    Returns:
+        dict: Paginated games with metadata
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Request:
+        GET /games?days=3&page=1&page_size=10
+
+    Example Response:
+        {
+            "game_count": 10,
+            "total_games": 45,
+            "page": 1,
+            "page_size": 10,
+            "total_pages": 5,
+            "has_more": true,
+            "games": [...]
+        }
+
+    Pagination Fields:
+        - game_count: Number of games in current page
+        - total_games: Total games matching criteria
+        - page/page_size: Current pagination parameters
+        - total_pages: Total number of pages available
+        - has_more: Boolean indicating if more pages exist
+
+    Data Source: Uses upcoming_games Supabase view
     """
     try:
         # Use the view which returns flat data (home_team as string, not object)
@@ -804,16 +1204,59 @@ def get_games(
         raise HTTPException(status_code=500, detail="Unable to fetch games. Please try again later.")
 
 
-@app.get("/games/{game_id}", response_model=GameResponse)
+@app.get("/games/{game_id}", response_model=GameResponse, tags=["Games"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_game(request: Request, game_id: GameIdPath):
     """
-    Get detailed info for a specific game.
+    Get detailed information for a specific game.
 
-    Path params:
-    - game_id: UUID of the game
+    Returns comprehensive game data including:
+    - Basic game info (date, teams, venue)
+    - Current betting lines (spread, moneylines)
+    - Team rankings (AP poll)
+    - Model predictions
+    - All AI analyses (Claude and Grok)
 
-    Rate limited: 30 requests per minute per IP.
+    Path Parameters:
+        game_id: UUID of the game (validated format)
+
+    Returns:
+        GameResponse: Complete game details
+
+    Raises:
+        404 Not Found: If game doesn't exist
+        422 Validation Error: If game_id format invalid
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Request:
+        GET /games/123e4567-e89b-12d3-a456-426614174000
+
+    Example Response:
+        {
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "date": "2025-01-25",
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "home_rank": 5,
+            "away_rank": null,
+            "home_spread": -5.5,
+            "is_conference_game": true,
+            "prediction": {
+                "predicted_home_cover_prob": 0.54,
+                "confidence_tier": "medium",
+                "edge_pct": 2.0
+            },
+            "ai_analyses": [
+                {
+                    "ai_provider": "claude",
+                    "recommended_bet": "away_spread",
+                    "confidence_score": 0.68
+                }
+            ]
+        }
+
+    Note: Use /games/{game_id}/analytics for KenPom and Haslametrics data
     """
     game = get_game_by_id(game_id)
     if not game:
@@ -870,29 +1313,82 @@ def get_game(request: Request, game_id: GameIdPath):
 
 
 class GameAnalyticsResponse(BaseModel):
-    """Response model for game analytics (KenPom + Haslametrics)."""
-    game_id: str
-    home_team: str
-    away_team: str
-    home_kenpom: Optional[dict] = None
-    away_kenpom: Optional[dict] = None
-    home_haslametrics: Optional[dict] = None
-    away_haslametrics: Optional[dict] = None
+    """
+    Response model for /games/{game_id}/analytics endpoint.
+
+    Contains advanced analytics from KenPom and Haslametrics for both teams.
+
+    Example Response:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "home_team": "Duke",
+            "away_team": "North Carolina",
+            "home_kenpom": {
+                "rank": 5,
+                "adj_offense": 118.5,
+                "adj_defense": 95.2,
+                "adj_efficiency_margin": 23.3,
+                "adj_tempo": 68.5
+            },
+            "away_kenpom": {...},
+            "home_haslametrics": {
+                "rank": 8,
+                "all_play_pct": 0.89,
+                "momentum_overall": 0.3,
+                "offensive_efficiency": 115.2
+            },
+            "away_haslametrics": {...}
+        }
+    """
+    game_id: str = Field(description="Game UUID")
+    home_team: str = Field(description="Home team name")
+    away_team: str = Field(description="Away team name")
+    home_kenpom: Optional[dict] = Field(default=None, description="Home team KenPom analytics")
+    away_kenpom: Optional[dict] = Field(default=None, description="Away team KenPom analytics")
+    home_haslametrics: Optional[dict] = Field(default=None, description="Home team Haslametrics data")
+    away_haslametrics: Optional[dict] = Field(default=None, description="Away team Haslametrics data")
 
 
-@app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse)
+@app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse, tags=["Games", "Analytics"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_game_analytics(request: Request, game_id: GameIdPath):
     """
-    Get KenPom and Haslametrics analytics for a specific game.
+    Get advanced analytics (KenPom + Haslametrics) for a specific game.
 
-    This endpoint is designed for lazy loading - fetch analytics only when
-    a user expands a game card or views detailed analytics section.
+    Designed for lazy loading - fetch analytics only when a user expands
+    a game card or views the detailed analytics section.
 
-    Path params:
-    - game_id: UUID of the game
+    Returns comprehensive advanced analytics for both teams:
 
-    Rate limited: 30 requests per minute per IP.
+    **KenPom Metrics** (requires subscription):
+        - rank: Overall KenPom ranking
+        - adj_offense: Adjusted offensive efficiency (points per 100 possessions)
+        - adj_defense: Adjusted defensive efficiency (lower is better)
+        - adj_efficiency_margin: AdjO - AdjD (main power rating)
+        - adj_tempo: Adjusted tempo (possessions per 40 minutes)
+        - luck: Deviation from expected record
+        - sos_adj_em: Strength of schedule
+
+    **Haslametrics Metrics** (FREE):
+        - rank: Overall Haslametrics ranking
+        - all_play_pct: Win probability vs average D1 team (core metric)
+        - momentum_overall/offense/defense: Recent performance trends
+        - offensive_efficiency/defensive_efficiency: Points per 100 possessions
+        - quad_1_record through quad_4_record: Record vs NET quadrants
+        - last_5_record: Recent 5-game record
+
+    Path Parameters:
+        game_id: UUID of the game
+
+    Returns:
+        GameAnalyticsResponse: Analytics for both teams
+
+    Raises:
+        404 Not Found: If game doesn't exist
+
+    Rate Limit: 30 requests per minute per IP
+
+    Caching: Results are cached for 1 hour (refreshed during daily pipeline)
     """
     from .supabase_client import get_team_kenpom, get_team_haslametrics
 
@@ -933,7 +1429,7 @@ def get_game_analytics(request: Request, game_id: GameIdPath):
     )
 
 
-@app.get("/stats", response_model=StatsResponse)
+@app.get("/stats", response_model=StatsResponse, tags=["Performance"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_stats(
     request: Request,
@@ -943,12 +1439,39 @@ def get_stats(
     ] = None
 ):
     """
-    Get performance statistics.
+    Get betting performance statistics for a season.
 
-    Query params:
-    - season: Year (2000-2100), defaults to current year
+    Calculates comprehensive performance metrics from graded bets:
+    - Win/loss record and percentage
+    - Units wagered and won
+    - ROI (Return on Investment)
 
-    Rate limited: 30 requests per minute per IP.
+    Query Parameters:
+        season: Season year (default: current year)
+
+    Returns:
+        StatsResponse: Season performance statistics
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Request:
+        GET /stats?season=2025
+
+    Example Response:
+        {
+            "season": 2025,
+            "total_bets": 150,
+            "wins": 85,
+            "losses": 62,
+            "pushes": 3,
+            "win_pct": 57.82,
+            "units_wagered": 150.0,
+            "units_won": 12.5,
+            "roi_pct": 8.33
+        }
+
+    Note: Win percentage of 52.4% is breakeven at standard -110 odds.
+    Returns zeros if no graded bets exist for the season.
     """
     if season is None:
         season = date.today().year
@@ -978,7 +1501,7 @@ def get_stats(
         raise HTTPException(status_code=500, detail="Unable to fetch statistics. Please try again later.")
 
 
-@app.get("/rankings")
+@app.get("/rankings", tags=["Rankings"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_rankings(
     request: Request,
@@ -992,13 +1515,39 @@ def get_rankings(
     ] = "ap"
 ):
     """
-    Get current AP rankings.
+    Get current AP poll rankings.
 
-    Query params:
-    - season: Year (2000-2100), defaults to current year
-    - poll_type: Type of poll, e.g., 'ap' (default)
+    Returns the most recent week's rankings for the specified season and poll type.
 
-    Rate limited: 30 requests per minute per IP.
+    Query Parameters:
+        season: Season year (default: current year)
+        poll_type: Poll type (default: "ap" for AP Top 25)
+
+    Returns:
+        dict: Season, poll type, and ranked teams
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Request:
+        GET /rankings?season=2025&poll_type=ap
+
+    Example Response:
+        {
+            "season": 2025,
+            "poll_type": "ap",
+            "rankings": [
+                {
+                    "rank": 1,
+                    "team": {"id": "...", "name": "Auburn"},
+                    "points": 1525,
+                    "record": "18-1"
+                },
+                ...
+            ]
+        }
+
+    Note: Rankings are updated weekly during the season. Returns empty
+    list if no rankings exist for the specified season/poll.
     """
     if season is None:
         season = date.today().year
@@ -1016,7 +1565,7 @@ def get_rankings(
         raise HTTPException(status_code=500, detail="Unable to fetch rankings. Please try again later.")
 
 
-@app.post("/refresh")
+@app.post("/refresh", tags=["Admin"])
 def refresh_data(
     api_key: Annotated[
         Optional[str],
@@ -1028,13 +1577,49 @@ def refresh_data(
     ] = False
 ):
     """
-    Trigger a data refresh (games, spreads, rankings).
+    Trigger a full data refresh pipeline.
 
-    This endpoint should be called by a cron job or manually.
+    Runs the complete daily data refresh including:
+    1. Fetch betting lines from The Odds API (spreads, moneylines, totals)
+    2. Refresh KenPom advanced analytics (if credentials configured)
+    3. Refresh Haslametrics data (FREE, no auth required)
+    4. Refresh ESPN tip times (accurate game start times)
+    5. Refresh prediction market data (Polymarket, Kalshi)
+    6. Detect arbitrage opportunities (>=10% edge threshold)
+    7. Run predictions on upcoming games
+    8. Update game results for completed games
+    9. Run AI analysis on today's games
 
-    Query params:
-    - api_key: Optional authentication key (max 100 chars)
-    - force_regenerate: If true, delete and regenerate all predictions
+    This endpoint is typically called by GitHub Actions cron job at 6 AM EST.
+
+    Query Parameters:
+        api_key: Optional authentication key (checked against REFRESH_API_KEY env var)
+        force_regenerate: If true, deletes existing predictions before regenerating
+
+    Returns:
+        dict: Status and results for each pipeline step
+
+    Example Request:
+        POST /refresh?api_key=secret123&force_regenerate=false
+
+    Example Response:
+        {
+            "status": "success",
+            "timestamp": "2025-01-25T06:00:00Z",
+            "results": {
+                "odds_fetched": 45,
+                "kenpom_updated": 362,
+                "haslametrics_updated": 362,
+                "predictions_created": 38,
+                "ai_analyses_created": 12
+            }
+        }
+
+    Warning: Full refresh can take 3-5 minutes. For testing, use individual
+    endpoints like /refresh-haslametrics or /regenerate-predictions.
+
+    Security: If REFRESH_API_KEY is set in environment, requests with
+    incorrect api_key will be rejected.
     """
     # Simple API key check (only if REFRESH_API_KEY is set in environment)
     expected_key = os.getenv("REFRESH_API_KEY")
@@ -1071,11 +1656,30 @@ def refresh_data(
         raise HTTPException(status_code=500, detail="Data refresh failed. Please try again later.")
 
 
-@app.post("/regenerate-predictions")
+@app.post("/regenerate-predictions", tags=["Admin"])
 def regenerate_predictions():
     """
-    Quick endpoint to regenerate predictions only (no odds/kenpom fetch).
-    Much faster than full /refresh.
+    Regenerate predictions for upcoming games (fast, no external API calls).
+
+    This endpoint is much faster than /refresh as it only runs the prediction
+    model on existing data without fetching new odds, KenPom, or Haslametrics.
+
+    Use this when:
+    - Testing prediction model changes
+    - Games need predictions but data is already fresh
+    - Full refresh is timing out
+
+    Returns:
+        dict: Status and count of predictions created
+
+    Example Response:
+        {
+            "status": "success",
+            "predictions_created": 38
+        }
+
+    Note: Does not overwrite existing predictions unless they're older than
+    the latest data refresh.
     """
     try:
         from ..data_collection.daily_refresh import run_predictions
@@ -1093,11 +1697,38 @@ def regenerate_predictions():
         raise HTTPException(status_code=500, detail="Prediction regeneration failed. Please try again later.")
 
 
-@app.post("/refresh-haslametrics")
+@app.post("/refresh-haslametrics", tags=["Admin"])
 def refresh_haslametrics_endpoint():
     """
-    Quick endpoint to refresh only Haslametrics data.
-    Much faster than full /refresh - useful for testing.
+    Refresh only Haslametrics advanced analytics data.
+
+    Fast endpoint (10-20 seconds) that fetches the latest Haslametrics
+    ratings without running the full refresh pipeline. Useful for testing
+    and when only analytics data needs updating.
+
+    Haslametrics is FREE (no subscription required) and provides:
+    - All-Play Percentage (core metric: win % vs average D1 team)
+    - Momentum indicators (overall, offense, defense)
+    - Efficiency ratings
+    - Quadrant records (Q1-Q4)
+    - Recent performance (last 5 games)
+
+    Returns:
+        dict: Status and count of teams updated
+
+    Example Response:
+        {
+            "status": "success",
+            "timestamp": "2025-01-25T14:30:00Z",
+            "results": {
+                "inserted": 362,
+                "skipped": 0,
+                "errors": 0
+            }
+        }
+
+    Technical Note: Requires 'brotli' package as Haslametrics serves
+    Brotli-compressed XML responses.
     """
     try:
         from ..data_collection.haslametrics_scraper import refresh_haslametrics_data
@@ -1122,11 +1753,36 @@ def refresh_haslametrics_endpoint():
         raise HTTPException(status_code=500, detail="Haslametrics refresh failed. Please try again later.")
 
 
-@app.post("/refresh-prediction-markets")
+@app.post("/refresh-prediction-markets", tags=["Admin"])
 def refresh_prediction_markets_endpoint():
     """
-    Quick endpoint to refresh only prediction market data (Polymarket + Kalshi).
-    Much faster than full /refresh - useful for testing.
+    Refresh prediction market data from Polymarket and Kalshi.
+
+    Fetches current prices and market data from prediction market platforms,
+    matches markets to teams/games in our database, and detects arbitrage
+    opportunities between prediction markets and traditional sportsbooks.
+
+    Pipeline Steps:
+    1. Fetch Polymarket NCAA basketball markets
+    2. Fetch Kalshi NCAAMBGAME markets (if API configured)
+    3. Match markets to teams in our database
+    4. Compare prices with sportsbook implied probabilities
+    5. Flag arbitrage opportunities (>=10% delta)
+
+    Returns:
+        dict: Status and results from each platform
+
+    Example Response:
+        {
+            "status": "success",
+            "timestamp": "2025-01-25T14:30:00Z",
+            "polymarket": {"markets_found": 45, "matched": 38},
+            "kalshi": {"markets_found": 12, "matched": 8},
+            "arbitrage": {"opportunities_found": 3}
+        }
+
+    Note: Kalshi requires API credentials (KALSHI_API_KEY and
+    KALSHI_PRIVATE_KEY_PATH environment variables).
     """
     try:
         import asyncio
@@ -1152,10 +1808,32 @@ def refresh_prediction_markets_endpoint():
         raise HTTPException(status_code=500, detail="Prediction market refresh failed. Please try again later.")
 
 
-@app.get("/prediction-markets")
+@app.get("/prediction-markets", tags=["Prediction Markets"])
 def get_prediction_markets():
     """
-    Get stored prediction market data with team names.
+    Get stored prediction market data with matched team names.
+
+    Returns currently open prediction markets from Polymarket and Kalshi
+    that have been matched to teams in our database.
+
+    Returns:
+        dict: Count and list of matched markets
+
+    Example Response:
+        {
+            "count": 45,
+            "markets": [
+                {
+                    "source": "polymarket",
+                    "market_id": "0x123...",
+                    "title": "Duke to win ACC Tournament",
+                    "market_type": "futures",
+                    "status": "open",
+                    "team_id": "abc123...",
+                    "team_name": "Duke"
+                }
+            ]
+        }
     """
     try:
         from .supabase_client import get_supabase
@@ -1336,7 +2014,7 @@ def test_kalshi_endpoint():
         return {"error": str(e)}
 
 
-@app.post("/refresh-espn-times")
+@app.post("/refresh-espn-times", tags=["Admin"])
 def refresh_espn_times_endpoint(
     days: Annotated[
         int,
@@ -1344,13 +2022,35 @@ def refresh_espn_times_endpoint(
     ] = 7
 ):
     """
-    Update game tip times from ESPN's public API.
+    Update game tip-off times from ESPN's public API.
 
-    This fetches real scheduled game times and updates our games table.
-    Fast operation - no authentication required, can be run frequently.
+    Fetches accurate scheduled game times from ESPN and updates the tip_time
+    field in our games table. This is a fast operation (5-10 seconds) that
+    requires no authentication.
 
-    Query params:
-    - days: Number of days ahead to fetch (default: 7, max: 14)
+    Use Cases:
+    - Initial population of tip times after games are created
+    - Updating postponed/rescheduled games
+    - Syncing with latest ESPN schedule data
+
+    Query Parameters:
+        days: Number of days ahead to fetch (default: 7, max: 14)
+
+    Returns:
+        dict: Status and count of games updated
+
+    Example Response:
+        {
+            "status": "success",
+            "results": {
+                "espn_games_found": 85,
+                "games_updated": 78,
+                "games_not_matched": 7
+            }
+        }
+
+    Note: Games are matched by date and team names. Some ESPN team names
+    may not match our database and will be skipped.
     """
     try:
         from ..data_collection.espn_scraper import refresh_espn_tip_times
@@ -1374,7 +2074,7 @@ def refresh_espn_times_endpoint(
         raise HTTPException(status_code=500, detail="ESPN tip times refresh failed. Please try again later.")
 
 
-@app.get("/backtest")
+@app.get("/backtest", tags=["Performance"])
 def backtest(
     start_date: Annotated[
         str,
@@ -1401,12 +2101,26 @@ def backtest(
     ] = "baseline"
 ):
     """
-    Run backtest on historical data.
+    Run backtest on historical data (PLACEHOLDER).
 
-    Query params:
-    - start_date: Start date in ISO format (required)
-    - end_date: End date in ISO format (required)
-    - model: Model name for backtesting (default: baseline)
+    This endpoint will allow running prediction models against historical
+    game data to evaluate performance.
+
+    Query Parameters:
+        start_date: Start date in ISO format (required)
+        end_date: End date in ISO format (required)
+        model: Model name for backtesting (default: "baseline")
+
+    Returns:
+        dict: Backtest parameters (not yet implemented)
+
+    Raises:
+        422 Validation Error: If end_date is before start_date
+
+    Example Request:
+        GET /backtest?start_date=2024-11-01&end_date=2024-12-31&model=baseline
+
+    Status: NOT YET IMPLEMENTED - Returns placeholder response
     """
     # Validate date range
     try:
@@ -1432,16 +2146,51 @@ def backtest(
     }
 
 
-@app.get("/debug/ai-analysis/{game_id}")
+@app.get("/debug/ai-analysis/{game_id}", tags=["Debug"])
 @limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
 def debug_ai_analysis(request: Request, game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
     """
-    Debug endpoint to diagnose AI analysis issues.
-    Returns detailed error information instead of generic messages.
+    Debug endpoint for diagnosing AI analysis issues.
 
-    WARNING: This endpoint exposes internal errors - remove in production!
+    Runs through the full AI analysis pipeline step-by-step and returns
+    detailed information about each step, including any errors encountered.
+    Useful for troubleshooting when /ai-analysis returns generic errors.
 
-    Rate limited: 5 requests per minute per IP (AI endpoint).
+    Pipeline Steps Tested:
+    1. Game fetch - Verify game exists in database
+    2. Context build - Build game context with all data sources
+    3. API keys - Verify AI provider credentials are configured
+    4. Prompt build - Construct the analysis prompt
+    5. AI call - Call the AI provider and parse response
+    6. DB insert - Save analysis to database
+
+    Path Parameters:
+        game_id: UUID of the game to test
+        provider: AI provider to test ("claude" or "grok")
+
+    Returns:
+        dict: Step-by-step results and any errors
+
+    Example Response:
+        {
+            "game_id": "123...",
+            "provider": "claude",
+            "steps": {
+                "1_game_fetch": {"status": "success", "home_team": "Duke"},
+                "2_build_context": {"status": "success", "has_kenpom": true},
+                "3_api_keys": {"anthropic_configured": true},
+                "4_prompt_build": {"status": "success", "prompt_length": 2500},
+                "5_ai_call": {"status": "success", "recommended_bet": "away_spread"},
+                "6_db_insert": {"status": "success", "inserted_id": "abc..."}
+            },
+            "errors": [],
+            "overall_status": "success"
+        }
+
+    WARNING: This endpoint exposes detailed error information.
+    Consider disabling in production (check ENVIRONMENT env var).
+
+    Rate Limit: 5 requests per minute per IP
     """
     results = {
         "game_id": game_id,

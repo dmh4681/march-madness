@@ -2,15 +2,52 @@
 Haslametrics Data Scraper
 
 Fetches advanced analytics from Haslametrics.
-FREE - No subscription required.
+FREE - No subscription required!
 
-Uses "All-Play Percentage" methodology instead of KenPom's efficiency margin.
+Haslametrics Overview:
+======================
+Haslametrics (haslametrics.com) is a free alternative to KenPom that uses a
+unique "All-Play Percentage" methodology. Created by T.J. Haslett.
+
+Key Differences from KenPom:
+- All-Play % is the core metric (vs KenPom's AdjEM)
+- Momentum metrics show recent trend direction
+- FREE (vs KenPom's $20/year subscription)
+- XML data feed (vs KenPom's HTML scraping)
+
+Key Metrics Collected:
+=====================
+- All-Play Percentage (ap): Probability of beating an average D1 team on a
+  neutral court. Top teams: 95%+, Bottom teams: <10%
+- Offensive Efficiency (ou): Points per 100 possessions
+- Defensive Efficiency (du): Points allowed per 100 possessions
+- Momentum Overall (mom): Recent performance trend (-1 to +1 scale)
+- Momentum Offense (mmo): Offensive trend
+- Momentum Defense (mmd): Defensive trend
+- Consistency (inc): Inconsistency metric (lower = more consistent)
+- Quadrant Records: Performance vs NET quadrants (Q1 = best opponents)
+- Last 5 Record: Recent 5-game performance
+
+How These Are Used in AI Analysis:
+==================================
+1. All-Play % provides baseline win probability estimate
+2. Momentum metrics identify teams trending up/down (value opportunity)
+3. Quadrant records show quality of wins (important for tournament)
+4. Last 5 indicates current form vs season-long metrics
+5. Cross-validation with KenPom when both available
+
+Technical Implementation:
+========================
+- Data served as XML at haslametrics.com/ratings{YY}.xml
+- Server uses Brotli compression (Content-Encoding: br)
+- Requires 'brotli' Python package for decompression
+- User-Agent header required (server blocks naked requests)
 
 Usage:
-    python -m backend.data_collection.haslametrics_scraper [season]
-
-Example:
+    python -m backend.data_collection.haslametrics_scraper
     python -m backend.data_collection.haslametrics_scraper 2025
+
+No environment variables required (it's FREE!).
 """
 
 import logging
@@ -55,12 +92,31 @@ def normalize_team_name(name: str) -> str:
     """
     Normalize Haslametrics team names to match our database.
 
-    Haslametrics uses abbreviated names (e.g., "N Carolina", "Abil. Christian").
+    Haslametrics uses heavily abbreviated team names to fit their XML format.
+    This function maps those abbreviations to our normalized format.
+
+    Common Haslametrics Abbreviations:
+    - "N Carolina" -> "north-carolina"
+    - "S Florida" -> "south-florida"
+    - "Abil. Christian" -> "abilene-christian"
+    - "St." and "St" for "Saint"
+    - "St." for "State"
+
+    The name_map below is extensive because Haslametrics uses unique
+    abbreviations not seen in other sources. If you see unmatched teams
+    in the logs, add the mapping here.
+
+    Args:
+        name: Team name as it appears in Haslametrics XML
+
+    Returns:
+        Normalized team name matching our teams.normalized_name column
     """
     if not name:
         return ""
 
-    # Haslametrics-specific name mappings
+    # Extensive mappings for Haslametrics' abbreviated naming conventions
+    # Keys: Haslametrics XML names, Values: Our normalized_name format
     name_map = {
         "N Carolina": "north-carolina",
         "NC State": "nc-state",
@@ -522,21 +578,57 @@ def get_team_id(team_name: str) -> Optional[str]:
 
 def _fetch_haslametrics_ratings_uncached(season: int = 2025) -> Optional[list]:
     """
-    Internal function to fetch Haslametrics ratings without caching.
+    Internal function to fetch Haslametrics ratings from their XML endpoint.
+
+    Technical Implementation:
+    ========================
+    Haslametrics serves team ratings as an XML file with a predictable URL pattern:
+    - URL: https://haslametrics.com/ratings{YY}.xml (e.g., ratings25.xml for 2024-25)
+
+    The server requires proper headers or it will block the request:
+    - User-Agent: Must look like a real browser
+    - Accept: Should include application/xml
+
+    Response Handling:
+    - Server uses Brotli compression (Content-Encoding: br)
+    - The 'brotli' Python package must be installed for auto-decompression
+    - Response is XML with <mr> elements for each team
+
+    XML Attribute Reference (from Haslametrics):
+    ============================================
+    Each <mr> element contains these attributes:
+    - rk: Overall rank (1-362)
+    - t: Team name (abbreviated)
+    - c: Conference abbreviation
+    - w/l: Wins/Losses
+    - ou: Offensive efficiency (points per 100 possessions)
+    - du: Defensive efficiency (points allowed per 100 possessions)
+    - ap: All-Play Percentage (core metric: win probability vs avg D1 team)
+    - mom: Momentum overall (recent trend, -1 to +1)
+    - mmo: Momentum offense
+    - mmd: Momentum defense
+    - inc: Inconsistency (lower = more consistent)
+    - sos: Strength of schedule
+    - p5wl: Last 5 games record (e.g., "4-1")
+    - r_q1 through r_q4: Quadrant records (vs NET quadrants)
 
     Args:
         season: The season year (e.g., 2025 for 2024-25 season)
 
     Returns:
-        List of team rating dicts or None if failed
+        List of team rating dicts or None if fetch/parse failed
+
+    Note: If you see "brotli" or decompression errors, install with:
+        pip install brotli
     """
-    # Convert 2025 -> 25 for URL
+    # Convert 4-digit year to 2-digit for URL (2025 -> "25")
     season_short = str(season)[-2:]
     url = HASLAMETRICS_BASE_URL.format(season=season_short)
 
     print(f"Fetching Haslametrics data from: {url}")
 
-    # Use proper headers to avoid being blocked
+    # Headers required to avoid being blocked by Haslametrics server
+    # The server checks User-Agent and rejects requests without browser-like headers
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/xml, text/xml, */*",
@@ -544,47 +636,64 @@ def _fetch_haslametrics_ratings_uncached(season: int = 2025) -> Optional[list]:
     }
 
     try:
-        # Note: brotli package must be installed for automatic Brotli decompression
-        # Haslametrics serves Content-Encoding: br (Brotli compressed)
+        # IMPORTANT: The 'brotli' package must be installed for this to work!
+        # Haslametrics uses Brotli compression (Content-Encoding: br)
+        # requests library auto-decompresses when brotli package is installed
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
 
-        # Parse XML (requests auto-decompresses Brotli when brotli package is installed)
+        # Parse XML response into ElementTree
+        # The root element contains <mr> (metrics row) elements for each team
         root = ET.fromstring(response.content)
         teams = []
 
+        # Iterate through all <mr> elements in the XML
+        # Each <mr> contains one team's full metrics as XML attributes
         for mr in root.findall(".//mr"):
+            # Extract all metrics from XML attributes
+            # Attribute names are abbreviated to minimize XML size
             team_data = {
-                "rank": mr.get("rk"),
-                "team": mr.get("t"),
-                "conference": mr.get("c"),
-                "wins": mr.get("w"),
-                "losses": mr.get("l"),
-                # Efficiency metrics (ou/du are offensive/defensive units)
+                # Core identification
+                "rank": mr.get("rk"),           # Overall Haslametrics rank
+                "team": mr.get("t"),            # Team name (abbreviated)
+                "conference": mr.get("c"),      # Conference abbreviation
+                "wins": mr.get("w"),            # Season wins
+                "losses": mr.get("l"),          # Season losses
+
+                # Efficiency metrics (core stats for analysis)
+                # ou/du = Offensive/Defensive Units (points per 100 possessions)
                 "offensive_efficiency": mr.get("ou"),
                 "defensive_efficiency": mr.get("du"),
-                # Shooting percentages
-                "ft_pct": mr.get("ftpct"),
-                "dft_pct": mr.get("dftpct"),  # Defensive FT% allowed
-                # Momentum metrics
-                "momentum_overall": mr.get("mom"),
-                "momentum_offense": mr.get("mmo"),  # Correct attribute name
-                "momentum_defense": mr.get("mmd"),  # Correct attribute name
-                # Quality metrics
-                "consistency": mr.get("inc"),  # Inconsistency metric (lower = more consistent)
-                "sos": mr.get("sos"),
-                "rpi": mr.get("rpi"),
-                "all_play_pct": mr.get("ap"),  # All-Play Percentage (core metric)
-                "win_rate": mr.get("wr"),
-                # Recent performance
-                "last_5_record": mr.get("p5wl"),
-                "last_5_trend": mr.get("p5ud"),  # Up/down trend
-                # Quadrant records (NET-based)
+
+                # Shooting percentages (less commonly used)
+                "ft_pct": mr.get("ftpct"),      # Free throw percentage
+                "dft_pct": mr.get("dftpct"),    # Opponent FT% allowed
+
+                # Momentum metrics - KEY FOR IDENTIFYING TRENDING TEAMS
+                # Positive = improving, Negative = declining
+                "momentum_overall": mr.get("mom"),   # Combined momentum
+                "momentum_offense": mr.get("mmo"),   # Offensive trend
+                "momentum_defense": mr.get("mmd"),   # Defensive trend
+
+                # Quality/consistency metrics
+                "consistency": mr.get("inc"),   # Inconsistency (lower = better)
+                "sos": mr.get("sos"),           # Strength of schedule
+                "rpi": mr.get("rpi"),           # RPI rating
+                "all_play_pct": mr.get("ap"),   # All-Play % (CORE METRIC)
+                "win_rate": mr.get("wr"),       # Actual win rate
+
+                # Recent performance - VALUABLE FOR CURRENT FORM
+                "last_5_record": mr.get("p5wl"),    # Last 5 games (e.g., "4-1")
+                "last_5_trend": mr.get("p5ud"),    # Trend direction
+
+                # Quadrant records - CRITICAL FOR TOURNAMENT EVALUATION
+                # Q1 = best opponents (NET 1-30 home, 1-50 neutral, 1-75 road)
                 "quad_1_record": mr.get("r_q1"),
                 "quad_2_record": mr.get("r_q2"),
                 "quad_3_record": mr.get("r_q3"),
                 "quad_4_record": mr.get("r_q4"),
-                # Home/Away/Neutral records
+
+                # Home/Away/Neutral splits
                 "home_record": mr.get("r_home"),
                 "away_record": mr.get("r_away"),
                 "neutral_record": mr.get("r_neut"),
@@ -643,21 +752,49 @@ def fetch_haslametrics_ratings(season: int = 2025, use_cache: bool = True) -> Op
 
 def store_haslametrics_ratings(teams: list, season: int) -> dict:
     """
-    Store Haslametrics ratings in Supabase.
+    Store Haslametrics ratings in Supabase database.
+
+    Data Transformation Process:
+    ===========================
+    1. Match each Haslametrics team name to our teams table
+    2. Calculate derived metrics (efficiency_margin = offense - defense)
+    3. Convert string values to proper numeric types
+    4. Insert into haslametrics_ratings table
+
+    Database Schema (haslametrics_ratings table):
+    ============================================
+    - team_id: FK to teams.id
+    - season: Year (e.g., 2025)
+    - captured_date: Date when data was fetched
+    - rank: Overall Haslametrics ranking
+    - offensive_efficiency/defensive_efficiency: Points per 100 possessions
+    - efficiency_margin: Calculated OE - DE
+    - all_play_pct: Core metric (0-100, probability of beating avg D1 team)
+    - momentum_overall/offense/defense: Recent trends (-1 to +1)
+    - consistency: Inconsistency metric (lower = more reliable)
+    - sos: Strength of schedule
+    - quad_1_record through quad_4_record: Performance vs NET quadrants
+    - last_5_record: Recent 5-game performance string
+
+    Team Matching:
+    =============
+    Haslametrics uses heavily abbreviated team names. If many teams fail to
+    match, add mappings to normalize_team_name(). The unmatched teams are
+    logged at the end for debugging.
 
     Args:
-        teams: List of team rating dicts from XML
+        teams: List of team rating dicts from XML parsing
         season: Season year
 
     Returns:
-        Dict with counts of inserted/skipped/errors
+        Dict with counts: {inserted, skipped, errors}
     """
     print(f"\n=== Storing Haslametrics Ratings ===")
 
     inserted = 0
     skipped = 0
     errors = 0
-    unmatched_teams = []
+    unmatched_teams = []  # Track unmatched for debugging
 
     for team_data in teams:
         try:
@@ -669,46 +806,78 @@ def store_haslametrics_ratings(teams: list, season: int) -> dict:
                 unmatched_teams.append(team_name)
                 continue
 
-            # Calculate efficiency margin
+            # Calculate efficiency margin (similar to KenPom's AdjEM)
+            # This derived metric is useful for cross-validation with KenPom
             oe = safe_float(team_data.get("offensive_efficiency"))
             de = safe_float(team_data.get("defensive_efficiency"))
             efficiency_margin = None
             if oe is not None and de is not None:
                 efficiency_margin = round(oe - de, 2)
 
+            # Build rating data dict for database insert
             rating_data = {
+                # Core identification
                 "team_id": team_id,
                 "season": season,
                 "captured_date": datetime.now().date().isoformat(),
+
+                # Rankings
                 "rank": safe_int(team_data.get("rank")),
+
+                # Efficiency metrics (points per 100 possessions)
                 "offensive_efficiency": oe,
                 "defensive_efficiency": de,
-                "efficiency_margin": efficiency_margin,
+                "efficiency_margin": efficiency_margin,  # Calculated: OE - DE
+
+                # All-Play Percentage: THE CORE HASLAMETRICS METRIC
+                # Represents probability of beating an average D1 team
+                # on a neutral court. Top 10 teams typically 90%+
+                "all_play_pct": safe_float(team_data.get("all_play_pct")),
+
+                # Free throw percentage
                 "ft_pct": safe_float(team_data.get("ft_pct")),
+
+                # Momentum metrics: KEY FOR FINDING TRENDING TEAMS
+                # Scale: typically -0.5 to +0.5
+                # Positive = team improving, Negative = team declining
                 "momentum_overall": safe_float(team_data.get("momentum_overall")),
                 "momentum_offense": safe_float(team_data.get("momentum_offense")),
                 "momentum_defense": safe_float(team_data.get("momentum_defense")),
+
+                # Consistency: lower values = more consistent/predictable team
                 "consistency": safe_float(team_data.get("consistency")),
+
+                # Strength metrics
                 "sos": safe_float(team_data.get("sos")),
                 "rpi": safe_float(team_data.get("rpi")),
-                "all_play_pct": safe_float(team_data.get("all_play_pct")),
+
+                # Recent form: string like "4-1" for last 5 games
+                # Critical for identifying current form vs season averages
                 "last_5_record": team_data.get("last_5_record"),
+
+                # Quadrant records: CRITICAL FOR TOURNAMENT EVALUATION
+                # Q1 = best opponents, Q4 = weakest
+                # Strong Q1 records indicate true quality
+                # Q3/Q4 losses are red flags
                 "quad_1_record": team_data.get("quad_1_record"),
                 "quad_2_record": team_data.get("quad_2_record"),
                 "quad_3_record": team_data.get("quad_3_record"),
                 "quad_4_record": team_data.get("quad_4_record"),
+
+                # Season record
                 "wins": safe_int(team_data.get("wins")),
                 "losses": safe_int(team_data.get("losses")),
                 "conference": team_data.get("conference"),
             }
 
-            # Remove None values
+            # Remove None values before insert
             rating_data = {k: v for k, v in rating_data.items() if v is not None}
 
-            # Insert into Supabase
+            # Insert into Supabase (not upsert - we want daily snapshots for historical analysis)
             supabase.table("haslametrics_ratings").insert(rating_data).execute()
             inserted += 1
 
+            # Progress indicator
             if inserted % 50 == 0:
                 print(f"  Inserted {inserted} ratings...")
 
@@ -719,7 +888,8 @@ def store_haslametrics_ratings(teams: list, season: int) -> dict:
 
     print(f"Inserted: {inserted}, Skipped: {skipped}, Errors: {errors}")
 
-    # Show sample of unmatched teams for debugging
+    # Debug output: show unmatched teams so we can add mappings
+    # If you see familiar team names here, add them to normalize_team_name()
     if unmatched_teams and len(unmatched_teams) <= 20:
         print(f"  Unmatched teams: {unmatched_teams[:20]}")
     elif unmatched_teams:

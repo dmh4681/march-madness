@@ -165,8 +165,10 @@ SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6...
 
 4. **Create backend environment file:**
    ```bash
-   # Copy the example and fill in your values
+   # Copy the root example (or use backend/.env.example for more detailed comments)
    cp .env.example .env
+   # OR
+   cp backend/.env.example .env
    ```
 
 5. **Edit `.env` with your API keys:**
@@ -630,6 +632,104 @@ curl https://your-railway-url/debug/ai-analysis/{game_id}?provider=claude
 ```
 
 This returns detailed step-by-step error information.
+
+### Data Collection Pipeline Issues
+
+#### 10. The Odds API Quota Exceeded
+
+**Symptom:** Spread data not updating, API returns 401/429
+
+**Causes:**
+- Free tier limit reached (500 requests/month)
+- API key invalid or expired
+
+**Checks:**
+```bash
+# Check remaining quota
+curl "https://api.the-odds-api.com/v4/sports?apiKey=YOUR_KEY"
+# Look for x-requests-remaining header
+```
+
+**Fix:** Upgrade to paid tier or wait for monthly reset
+
+#### 11. Team Name Matching Failures
+
+**Symptom:** Many "Could not match team" messages in logs
+
+**Cause:** External source uses different team names than our database
+
+**Debug:**
+```bash
+# Check which teams are in database
+python -c "
+from backend.api.supabase_client import get_supabase
+client = get_supabase()
+result = client.table('teams').select('name, normalized_name').execute()
+for t in result.data[:10]:
+    print(f'{t[\"name\"]} -> {t[\"normalized_name\"]}')"
+```
+
+**Fix:** Add name mappings in the respective scraper's `normalize_team_name()` function
+
+#### 12. Odds API Returns Empty Games
+
+**Symptom:** No games found even during season
+
+**Causes:**
+- Wrong sport key (should be `basketball_ncaab`)
+- Markets parameter incorrect
+- API outage
+
+**Debug:**
+```bash
+curl "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds?apiKey=YOUR_KEY&regions=us&markets=spreads,totals"
+```
+
+#### 13. KenPom Browser Automation Fails
+
+**Symptom:** "Chrome not found" or "WebDriver error"
+
+**Cause:** Railway doesn't have Chrome/Chromium installed by default
+
+**Solutions:**
+1. Use Railway's Chrome buildpack
+2. Run KenPom refresh locally instead
+3. Use kenpompy's headless mode if available
+
+```bash
+# Test kenpompy locally
+python -c "
+from kenpompy.utils import login
+browser = login('your@email.com', 'password')
+print('Login successful!')
+browser.close()"
+```
+
+#### 14. Prediction Market Matching Issues
+
+**Symptom:** Markets found but not matched to games/teams
+
+**Cause:** Market titles don't match team names in database
+
+**Debug:**
+```bash
+curl https://your-railway-url/debug-pm-match
+```
+
+**Fix:** Review market titles and add team name mappings in `prediction_market_scraper.py`
+
+#### 15. Cache Serving Stale Data
+
+**Symptom:** Analytics data not updating after refresh
+
+**Cause:** Cache TTL (1 hour) not expired
+
+**Fix:** Cache is automatically invalidated during refresh, but if needed:
+```python
+from backend.api.supabase_client import invalidate_ratings_cache
+result = invalidate_ratings_cache()
+print(result)  # Shows count of invalidated entries
+```
 
 ### Useful Debug Commands
 

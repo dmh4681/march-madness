@@ -1,15 +1,45 @@
 """
 Edge Validation Script
 
-Tests the core hypothesis:
+Tests the core betting hypothesis that powers Conference Contrarian:
 Do unranked conference underdogs cover at >52.4%?
 
-This is the most important script in the project.
-If edge doesn't validate, don't build anything else.
+Background: The Conference Contrarian Strategy
+=============================================
+The strategy is based on the observation that when a ranked team plays
+an unranked team from the same conference:
+1. The betting public overvalues the ranked team's status
+2. Conference familiarity reduces the talent gap
+3. Unranked teams at home are especially undervalued
+4. This creates a systematic edge on the underdog
+
+The 52.4% Threshold
+==================
+At standard -110 odds (risk $110 to win $100), you need to win 52.4%
+of bets to break even:
+    100 / (100 + 110) = 0.476 (loss probability)
+    1 - 0.476 = 0.524 (required win probability)
+
+If our edge hypothesis shows >52.4% win rate AND is statistically
+significant (p < 0.05), we have a profitable betting strategy.
+
+Statistical Methods Used
+=======================
+1. Binomial Test: Tests if observed win rate differs from 50% (fair market)
+2. Wilson Confidence Interval: Better than normal approximation for proportions,
+   especially with small-to-medium sample sizes
+3. P-value: Probability of seeing this result if null hypothesis (no edge) is true
+
+Interpreting Results
+==================
+- EDGE EXISTS: Win% > 52.4% AND p-value < 0.05
+- EDGE POSSIBLE: Win% > 52.4% but p-value >= 0.05 (need more data)
+- NO EDGE: Win% <= 52.4% or statistically indistinguishable from chance
 
 Usage:
-    python validate_edge.py
-    python validate_edge.py --csv path/to/games.csv
+    python validate_edge.py                   # Load from database
+    python validate_edge.py --csv data.csv   # Load from CSV file
+    python validate_edge.py --use-spread     # Use actual spread data if available
 """
 
 import argparse
@@ -26,7 +56,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from data_collection.schema import get_connection
 
 
-# Breakeven threshold at -110 odds
+# Breakeven threshold at standard -110 odds
+# At -110, you risk $110 to win $100
+# Breakeven = 110 / (110 + 100) = 0.524 = 52.4%
+# Any win rate above this is profitable long-term
 BREAKEVEN_PCT = 0.524
 
 
@@ -51,16 +84,34 @@ def load_games_from_csv(filepath: str) -> pd.DataFrame:
 
 def filter_target_games(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filter to our target dataset:
-    - Same conference matchups
-    - One team ranked, one team unranked
+    Filter to our target betting scenario:
+    - Same conference matchups (teams know each other well)
+    - One team ranked, one team unranked (asymmetric public perception)
+
+    Why These Filters?
+    =================
+    1. Same Conference: Conference familiarity reduces variance. Teams have
+       played each other before, game-planned specifically, and coaching
+       matchups are established. This theoretically reduces the ranked
+       team's advantage.
+
+    2. Ranked vs Unranked: This creates the perception gap we're exploiting.
+       The public sees "Top 15 vs Unranked" and bets the ranked team, but
+       in-conference that ranking gap is often misleading.
+
+    Args:
+        df: Games DataFrame with same_conference and ranked_vs_unranked columns
+
+    Returns:
+        Filtered DataFrame containing only target scenario games
     """
-    # Ensure boolean columns
+    # Ensure boolean columns (CSV loading may create strings)
     if df["same_conference"].dtype != bool:
         df["same_conference"] = df["same_conference"].astype(bool)
     if df["ranked_vs_unranked"].dtype != bool:
         df["ranked_vs_unranked"] = df["ranked_vs_unranked"].astype(bool)
 
+    # Apply both filters: conference game AND ranked vs unranked matchup
     target = df[(df["same_conference"] == True) & (df["ranked_vs_unranked"] == True)]
 
     return target.copy()
@@ -68,20 +119,41 @@ def filter_target_games(df: pd.DataFrame) -> pd.DataFrame:
 
 def identify_underdog(row: pd.Series) -> dict:
     """
-    Identify which team is the underdog and if they're unranked.
+    Identify which team is the underdog based on rankings.
 
-    Without spread data, we use rankings:
-    - Ranked team is assumed to be favorite
-    - Unranked team is assumed to be underdog
+    Underdog Identification Logic:
+    =============================
+    Without actual spread data, we use AP rankings as a proxy:
+    - Ranked team = assumed favorite
+    - Unranked team = assumed underdog
 
-    Returns dict with underdog info.
+    This is imperfect but generally accurate for our target scenario.
+    In ranked vs unranked games, the ranked team is favored ~95% of the time.
+
+    When spread data is available (via --use-spread flag), we use actual
+    betting lines instead of this heuristic.
+
+    Args:
+        row: DataFrame row with home_ap_rank, away_ap_rank, team names, scores
+
+    Returns:
+        Dict with underdog info, or None if both/neither teams are ranked
+        {
+            "underdog": "home" or "away",
+            "underdog_team": team name,
+            "favorite_team": team name,
+            "favorite_rank": AP ranking,
+            "underdog_score": final score,
+            "favorite_score": final score
+        }
     """
     home_ranked = pd.notna(row["home_ap_rank"])
     away_ranked = pd.notna(row["away_ap_rank"])
 
-    # In ranked vs unranked, the unranked team is the underdog
+    # In ranked vs unranked scenario, the unranked team is the underdog
     if home_ranked and not away_ranked:
-        # Home is ranked (favorite), away is unranked (underdog)
+        # Home team ranked (favorite), away team unranked (underdog)
+        # This is our "upset opportunity" scenario
         return {
             "underdog": "away",
             "underdog_team": row["away_team"],
@@ -91,7 +163,8 @@ def identify_underdog(row: pd.Series) -> dict:
             "favorite_score": row["home_score"],
         }
     elif away_ranked and not home_ranked:
-        # Away is ranked (favorite), home is unranked (underdog)
+        # Away team ranked (favorite), home team unranked (underdog)
+        # Road favorite scenario - historically tough for favorites
         return {
             "underdog": "home",
             "underdog_team": row["home_team"],
@@ -101,44 +174,72 @@ def identify_underdog(row: pd.Series) -> dict:
             "favorite_score": row["away_score"],
         }
     else:
+        # Both ranked or both unranked - doesn't fit our target scenario
         return None
 
 
 def calculate_ats_result(row: pd.Series, spread: float = None) -> str:
     """
-    Calculate ATS result for underdog.
+    Calculate Against The Spread (ATS) result for the underdog.
 
-    If no spread available, use a proxy spread based on ranking.
-    Common proxy: ranked team favored by ~5-10 points in conference games.
+    ATS Betting Explained:
+    =====================
+    When betting ATS, you're betting the underdog will either:
+    1. Win outright, OR
+    2. Lose by LESS than the spread
 
-    Returns: 'cover', 'loss', or 'push'
+    Example: Duke -7.5 vs UNC
+    - If UNC loses by 7 or less, UNC "covers"
+    - If UNC loses by 8+, Duke "covers"
+    - The .5 eliminates pushes (ties)
+
+    Without Spread Data:
+    ===================
+    When actual spread data isn't available, we use straight-up win/loss
+    as a proxy. This is imperfect because:
+    - Some underdogs lose but would have covered
+    - Some favorites win but don't cover
+
+    The proxy is most useful for large samples where these effects average out.
+
+    Args:
+        row: DataFrame row with game data
+        spread: Actual betting spread if available (positive = underdog getting points)
+
+    Returns:
+        'cover'/'win' - Underdog covered or won outright
+        'loss' - Underdog lost and didn't cover
+        'push' - Exact spread (rare with .5 spreads)
     """
     underdog_info = identify_underdog(row)
     if not underdog_info:
         return None
 
-    # Calculate actual margin (from underdog perspective)
+    # Calculate actual margin from underdog's perspective
+    # Positive = underdog won, Negative = underdog lost
     actual_margin = underdog_info["underdog_score"] - underdog_info["favorite_score"]
 
-    # If we have spread data, use it
+    # If we have actual spread data, calculate true ATS result
     if spread is not None:
-        # Spread is typically expressed as "favorite -X"
-        # So underdog covers if they lose by less than X or win
+        # Spread is expressed as "favorite -X", so underdog is +X
+        # Underdog covers if they win, OR lose by less than the spread
+        # Example: spread=7 means favorite -7, underdog +7
+        # Underdog covers if actual_margin > -7 (lose by less than 7)
         if actual_margin > -spread:
             return "cover"
         elif actual_margin < -spread:
             return "loss"
         else:
-            return "push"
+            return "push"  # Exact spread (rare)
 
-    # Without spread, calculate straight-up win/loss
-    # This is a proxy - ideally we'd have real spread data
+    # Without spread data, use straight-up result as proxy
+    # This underestimates edge (some losses would be covers)
     if actual_margin > 0:
-        return "win"  # Underdog won outright
+        return "win"  # Underdog won outright - definitely a cover
     elif actual_margin < 0:
-        return "loss"  # Underdog lost
+        return "loss"  # Underdog lost - may or may not have covered
     else:
-        return "push"
+        return "push"  # Tie game (very rare)
 
 
 def validate_edge(df: pd.DataFrame, use_spread: bool = False) -> dict:
@@ -241,14 +342,47 @@ def validate_edge(df: pd.DataFrame, use_spread: bool = False) -> dict:
 def wilson_confidence_interval(successes: int, trials: int, confidence: float = 0.95):
     """
     Calculate Wilson score confidence interval for a proportion.
-    More accurate than normal approximation for small samples.
+
+    Why Wilson Over Normal Approximation?
+    ====================================
+    The normal approximation (p +/- z*sqrt(p(1-p)/n)) has problems:
+    1. Can produce impossible intervals (< 0 or > 1)
+    2. Inaccurate for small samples
+    3. Inaccurate when p is near 0 or 1
+
+    Wilson score interval is more accurate for:
+    - Small to medium samples (n < 500)
+    - Proportions near boundaries (p < 0.2 or p > 0.8)
+    - Any sample size when we need accurate coverage
+
+    Formula:
+    ========
+    center = (p_hat + z^2/2n) / (1 + z^2/n)
+    margin = z * sqrt((p_hat(1-p_hat) + z^2/4n) / n) / (1 + z^2/n)
+
+    Interpretation:
+    ==============
+    A 95% CI of [0.52, 0.62] means we're 95% confident the true
+    cover rate is between 52% and 62%. If both bounds > 52.4%,
+    we have strong evidence of a profitable edge.
+
+    Args:
+        successes: Number of wins/covers
+        trials: Total number of bets (excluding pushes)
+        confidence: Confidence level (default: 0.95 for 95% CI)
+
+    Returns:
+        Tuple of (lower_bound, upper_bound)
     """
     if trials == 0:
         return (0, 0)
 
+    # Z-score for desired confidence level
+    # 95% confidence -> z = 1.96
     z = stats.norm.ppf(1 - (1 - confidence) / 2)
     p_hat = successes / trials
 
+    # Wilson score formula
     denominator = 1 + z**2 / trials
     center = (p_hat + z**2 / (2 * trials)) / denominator
     margin = z * np.sqrt((p_hat * (1 - p_hat) + z**2 / (4 * trials)) / trials) / denominator
