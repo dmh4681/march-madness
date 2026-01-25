@@ -184,3 +184,224 @@ def mock_grok_client():
     mock_response.usage = MagicMock(total_tokens=700)
     mock_client.chat.completions.create.return_value = mock_response
     return mock_client
+
+
+# ============================================================================
+# DATA PIPELINE FIXTURES
+# ============================================================================
+
+@pytest.fixture
+def sample_odds_api_game():
+    """Sample game from The Odds API."""
+    return {
+        "id": "game-external-1",
+        "home_team": "Duke Blue Devils",
+        "away_team": "North Carolina Tar Heels",
+        "commence_time": "2025-01-25T23:00:00Z",
+        "bookmakers": [
+            {
+                "key": "draftkings",
+                "markets": [
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {"name": "Duke Blue Devils", "point": -7.5, "price": -110},
+                            {"name": "North Carolina Tar Heels", "point": 7.5, "price": -110},
+                        ]
+                    },
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {"name": "Duke Blue Devils", "price": -280},
+                            {"name": "North Carolina Tar Heels", "price": 220},
+                        ]
+                    },
+                    {
+                        "key": "totals",
+                        "outcomes": [
+                            {"name": "Over", "point": 145.5, "price": -110},
+                            {"name": "Under", "point": 145.5, "price": -110},
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def sample_kenpom_dataframe():
+    """Sample KenPom DataFrame from kenpompy."""
+    import pandas as pd
+    return pd.DataFrame([
+        {
+            "Rk": 1, "Team": "Duke", "Conf": "ACC", "W-L": "18-2",
+            "AdjEM": 28.5, "AdjO": 118.5, "AdjO Rank": 3,
+            "AdjD": 90.0, "AdjD Rank": 2, "AdjT": 70.2, "AdjT Rank": 45,
+            "Luck": 0.02, "Luck Rank": 150, "SOS AdjEM": 12.5, "SOS AdjEM Rank": 10,
+        },
+        {
+            "Rk": 2, "Team": "North Carolina", "Conf": "ACC", "W-L": "17-3",
+            "AdjEM": 25.2, "AdjO": 116.8, "AdjO Rank": 8,
+            "AdjD": 91.6, "AdjD Rank": 5, "AdjT": 72.1, "AdjT Rank": 30,
+            "Luck": -0.01, "Luck Rank": 200, "SOS AdjEM": 11.8, "SOS AdjEM Rank": 12,
+        },
+    ])
+
+
+@pytest.fixture
+def sample_haslametrics_team_list():
+    """Sample Haslametrics team data as parsed from XML."""
+    return [
+        {
+            "team": "Duke",
+            "rank": "1",
+            "conference": "ACC",
+            "wins": "18",
+            "losses": "2",
+            "offensive_efficiency": "118.5",
+            "defensive_efficiency": "89.2",
+            "all_play_pct": "0.94",
+            "momentum_overall": "0.05",
+            "momentum_offense": "0.03",
+            "momentum_defense": "0.07",
+            "sos": "0.65",
+            "quad_1_record": "5-1",
+        },
+        {
+            "team": "N Carolina",
+            "rank": "2",
+            "conference": "ACC",
+            "wins": "17",
+            "losses": "3",
+            "offensive_efficiency": "116.2",
+            "defensive_efficiency": "91.5",
+            "all_play_pct": "0.91",
+            "momentum_overall": "0.02",
+            "momentum_offense": "0.01",
+            "momentum_defense": "0.03",
+            "sos": "0.62",
+            "quad_1_record": "4-2",
+        },
+    ]
+
+
+@pytest.fixture
+def mock_supabase_table():
+    """Create a mock Supabase table with common chain operations."""
+    mock_table = MagicMock()
+
+    # Setup select chain
+    mock_select = MagicMock()
+    mock_table.select.return_value = mock_select
+
+    mock_eq = MagicMock()
+    mock_select.eq.return_value = mock_eq
+    mock_eq.eq.return_value = mock_eq
+    mock_eq.is_.return_value = mock_eq
+    mock_eq.gte.return_value = mock_eq
+    mock_eq.lte.return_value = mock_eq
+
+    mock_ilike = MagicMock()
+    mock_select.ilike.return_value = mock_ilike
+
+    mock_order = MagicMock()
+    mock_eq.order.return_value = mock_order
+
+    mock_limit = MagicMock()
+    mock_order.limit.return_value = mock_limit
+
+    # Default empty results
+    mock_eq.execute.return_value = MagicMock(data=[])
+    mock_ilike.execute.return_value = MagicMock(data=[])
+    mock_limit.execute.return_value = MagicMock(data=[])
+    mock_select.execute.return_value = MagicMock(data=[])
+
+    # Setup insert chain
+    mock_insert = MagicMock()
+    mock_table.insert.return_value = mock_insert
+    mock_insert.execute.return_value = MagicMock(data=[{"id": "new-uuid"}])
+
+    # Setup delete chain
+    mock_delete = MagicMock()
+    mock_table.delete.return_value = mock_delete
+    mock_delete.eq.return_value = mock_delete
+    mock_delete.execute.return_value = MagicMock(data=[])
+
+    return mock_table
+
+
+@pytest.fixture
+def mock_requests_success():
+    """Mock requests.get for successful API calls."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.headers = {"x-requests-remaining": "450", "x-requests-used": "50"}
+    return mock_response
+
+
+@pytest.fixture
+def mock_requests_timeout():
+    """Mock requests.get that raises timeout."""
+    import requests
+    return requests.exceptions.Timeout("Connection timed out")
+
+
+@pytest.fixture
+def mock_requests_connection_error():
+    """Mock requests.get that raises connection error."""
+    import requests
+    return requests.exceptions.ConnectionError("Connection refused")
+
+
+# ============================================================================
+# HELPER FIXTURES FOR PIPELINE TESTING
+# ============================================================================
+
+@pytest.fixture
+def sample_team_mapping():
+    """Sample team ID mapping for tests."""
+    return {
+        "duke": "duke-uuid-1234",
+        "north-carolina": "unc-uuid-1234",
+        "kentucky": "kentucky-uuid-1234",
+        "kansas": "kansas-uuid-1234",
+        "connecticut": "uconn-uuid-1234",
+    }
+
+
+@pytest.fixture
+def sample_prediction():
+    """Sample prediction data."""
+    return {
+        "id": "prediction-uuid-1234",
+        "game_id": "550e8400-e29b-41d4-a716-446655440000",
+        "model_name": "baseline_v1",
+        "predicted_home_cover_prob": 0.54,
+        "predicted_away_cover_prob": 0.46,
+        "spread_at_prediction": -7.5,
+        "confidence_tier": "medium",
+        "recommended_bet": "home_spread",
+        "edge_pct": 4.0,
+    }
+
+
+@pytest.fixture
+def sample_ai_analysis():
+    """Sample AI analysis from Claude."""
+    return {
+        "id": "analysis-uuid-1234",
+        "game_id": "550e8400-e29b-41d4-a716-446655440000",
+        "ai_provider": "claude",
+        "recommended_bet": "home_spread",
+        "confidence_score": 0.72,
+        "key_factors": [
+            "Duke's elite defense",
+            "Home court advantage",
+            "Analytics favor Duke",
+        ],
+        "reasoning": "Duke's defensive efficiency creates matchup problems.",
+        "model_version": "claude-3-opus",
+        "tokens_used": 700,
+    }
