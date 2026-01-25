@@ -181,7 +181,6 @@ function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneylin
         </div>
       </td>
 
-<<<<<<< HEAD
       {/* Prediction Markets */}
       <td className="py-3 px-2 text-center">
         {game.has_prediction_data || game.has_arbitrage_signal ? (
@@ -203,8 +202,6 @@ function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneylin
         )}
       </td>
 
-=======
->>>>>>> testing/2026-01-21
       {/* Confidence */}
       <td className="py-3 px-2 text-center">
         {game.confidence_tier && game.confidence_tier !== 'pass' ? (
@@ -251,10 +248,7 @@ export function GamesTableCompact({ games }: GamesTableProps) {
             <th className="py-2 px-1 font-medium text-center">Spread</th>
             <th className="py-2 px-1 font-medium text-center">Pick</th>
             <th className="py-2 px-1 font-medium text-center">AI</th>
-<<<<<<< HEAD
             <th className="py-2 px-1 font-medium text-center">PM</th>
-=======
->>>>>>> testing/2026-01-21
             <th className="py-2 px-1 font-medium text-center">Edge</th>
           </tr>
         </thead>
@@ -310,7 +304,6 @@ export function GamesTableCompact({ games }: GamesTableProps) {
                   </div>
                 </td>
                 <td className="py-2 px-1 text-center">
-<<<<<<< HEAD
                   {game.has_arbitrage_signal ? (
                     <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" title="Arbitrage" />
                   ) : game.has_prediction_data ? (
@@ -320,8 +313,6 @@ export function GamesTableCompact({ games }: GamesTableProps) {
                   )}
                 </td>
                 <td className="py-2 px-1 text-center">
-=======
->>>>>>> testing/2026-01-21
                   {game.edge_pct && game.edge_pct > 0 ? (
                     <span className="text-green-400">+{game.edge_pct.toFixed(0)}%</span>
                   ) : (

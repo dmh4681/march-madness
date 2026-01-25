@@ -188,10 +188,7 @@ app.add_middleware(RequestLoggingMiddleware)
 # Register exception handlers
 app.add_exception_handler(ApiException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
-<<<<<<< HEAD
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-=======
->>>>>>> testing/2026-01-21
 app.add_exception_handler(Exception, general_exception_handler)
 
 
@@ -519,17 +516,6 @@ def predict(request: Request, predict_request: PredictRequest):
     Can provide either:
     - game_id: UUID of an existing game in the database
     - Or: home_team, away_team, spread, etc. for ad-hoc prediction
-<<<<<<< HEAD
-=======
-
-    Request body validated by PredictRequest model.
-    """
-    if request.game_id:
-        # Fetch game from database
-        game = get_game_by_id(request.game_id)
-        if not game:
-            raise NotFoundException(resource="Game", identifier=request.game_id)
->>>>>>> testing/2026-01-21
 
     Request body validated by PredictRequest model.
 
@@ -701,7 +687,6 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         error_msg = str(e)[:100]  # Truncate long error messages
         raise ValidationException(
             message=error_msg,
-<<<<<<< HEAD
             details={"game_id": analysis_request.game_id, "provider": analysis_request.provider}
         )
     except Exception as e:
@@ -709,15 +694,6 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         logger.error(f"AI analysis failed for game {analysis_request.game_id}: {e}", exc_info=True)
         raise ExternalApiException(
             service=f"AI/{analysis_request.provider}",
-=======
-            details={"game_id": request.game_id, "provider": request.provider}
-        )
-    except Exception as e:
-        # Log full error server-side, return generic message to client
-        logger.error(f"AI analysis failed for game {request.game_id}: {e}", exc_info=True)
-        raise ExternalApiException(
-            service=f"AI/{request.provider}",
->>>>>>> testing/2026-01-21
             message="AI analysis failed. Please try again later."
         )
 
@@ -756,10 +732,7 @@ def get_today(request: Request):
 @app.get("/games")
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_games(
-<<<<<<< HEAD
     request: Request,
-=======
->>>>>>> testing/2026-01-21
     start_date: Annotated[
         Optional[str],
         Query(
@@ -801,7 +774,6 @@ def get_games(
     - days: Number of days to fetch (default: 7, max: 30)
     - page: Page number, 1-indexed (default: 1)
     - page_size: Number of games per page (default: 20, max: 50)
-<<<<<<< HEAD
 
     Rate limited: 30 requests per minute per IP.
     """
@@ -809,14 +781,6 @@ def get_games(
         # Use the view which returns flat data (home_team as string, not object)
         # This matches the format expected by the frontend TodayGame type
         all_games = get_upcoming_games_view(days)
-=======
-    """
-    try:
-        if start_date:
-            all_games = get_games_by_date(date.fromisoformat(start_date))
-        else:
-            all_games = get_upcoming_games(days)
->>>>>>> testing/2026-01-21
 
         # Calculate pagination
         total_games = len(all_games)
@@ -841,22 +805,15 @@ def get_games(
 
 
 @app.get("/games/{game_id}", response_model=GameResponse)
-<<<<<<< HEAD
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_game(request: Request, game_id: GameIdPath):
-=======
-def get_game(game_id: GameIdPath):
->>>>>>> testing/2026-01-21
     """
     Get detailed info for a specific game.
 
     Path params:
     - game_id: UUID of the game
-<<<<<<< HEAD
 
     Rate limited: 30 requests per minute per IP.
-=======
->>>>>>> testing/2026-01-21
     """
     game = get_game_by_id(game_id)
     if not game:
@@ -924,12 +881,8 @@ class GameAnalyticsResponse(BaseModel):
 
 
 @app.get("/games/{game_id}/analytics", response_model=GameAnalyticsResponse)
-<<<<<<< HEAD
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_game_analytics(request: Request, game_id: GameIdPath):
-=======
-def get_game_analytics(game_id: GameIdPath):
->>>>>>> testing/2026-01-21
     """
     Get KenPom and Haslametrics analytics for a specific game.
 
@@ -938,11 +891,8 @@ def get_game_analytics(game_id: GameIdPath):
 
     Path params:
     - game_id: UUID of the game
-<<<<<<< HEAD
 
     Rate limited: 30 requests per minute per IP.
-=======
->>>>>>> testing/2026-01-21
     """
     from .supabase_client import get_team_kenpom, get_team_haslametrics
 
@@ -984,13 +934,9 @@ def get_game_analytics(game_id: GameIdPath):
 
 
 @app.get("/stats", response_model=StatsResponse)
-<<<<<<< HEAD
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_stats(
     request: Request,
-=======
-def get_stats(
->>>>>>> testing/2026-01-21
     season: Annotated[
         Optional[int],
         Query(ge=2000, le=2100, description="Season year (e.g., 2025)")
@@ -1001,11 +947,8 @@ def get_stats(
 
     Query params:
     - season: Year (2000-2100), defaults to current year
-<<<<<<< HEAD
 
     Rate limited: 30 requests per minute per IP.
-=======
->>>>>>> testing/2026-01-21
     """
     if season is None:
         season = date.today().year
@@ -1036,13 +979,9 @@ def get_stats(
 
 
 @app.get("/rankings")
-<<<<<<< HEAD
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_rankings(
     request: Request,
-=======
-def get_rankings(
->>>>>>> testing/2026-01-21
     season: Annotated[
         Optional[int],
         Query(ge=2000, le=2100, description="Season year")
@@ -1058,11 +997,8 @@ def get_rankings(
     Query params:
     - season: Year (2000-2100), defaults to current year
     - poll_type: Type of poll, e.g., 'ap' (default)
-<<<<<<< HEAD
 
     Rate limited: 30 requests per minute per IP.
-=======
->>>>>>> testing/2026-01-21
     """
     if season is None:
         season = date.today().year
@@ -1497,12 +1433,8 @@ def backtest(
 
 
 @app.get("/debug/ai-analysis/{game_id}")
-<<<<<<< HEAD
 @limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
 def debug_ai_analysis(request: Request, game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
-=======
-def debug_ai_analysis(game_id: GameIdPath, provider: Literal["claude", "grok"] = "claude"):
->>>>>>> testing/2026-01-21
     """
     Debug endpoint to diagnose AI analysis issues.
     Returns detailed error information instead of generic messages.
