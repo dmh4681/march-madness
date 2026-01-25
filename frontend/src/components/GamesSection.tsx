@@ -99,6 +99,7 @@ export function GamesSection({ games }: GamesSectionProps) {
               <span className="w-2 h-2 rounded-full bg-orange-500" />
               Grok
             </span>
+<<<<<<< HEAD
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-purple-500" />
               PM
@@ -107,6 +108,8 @@ export function GamesSection({ games }: GamesSectionProps) {
               <span className="w-2 h-2 rounded-full bg-yellow-500" />
               Arb
             </span>
+=======
+>>>>>>> testing/2026-01-21
           </div>
           {/* Confidence Legend */}
           <div className="hidden sm:flex items-center gap-2">
