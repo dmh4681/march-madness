@@ -5,8 +5,7 @@ import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { GameWithDetails, AIAnalysis, Prediction, Team, Spread, Ranking, GameStatus, KenPomRating, HaslametricsRating } from '@/lib/types';
 import { formatSpread, formatMoneyline, formatProbability } from '@/lib/api';
 import { ConfidenceBadge } from '@/components/ConfidenceBadge';
-import { AIAnalysisPanel } from '@/components/AIAnalysis';
-import { AIAnalysisButton } from '@/components/AIAnalysisButton';
+import { LazyAIAnalysisPanel, LazyAIAnalysisButton } from '@/components/LazyAIComponents';
 
 // Force dynamic rendering to always fetch fresh data
 export const dynamic = 'force-dynamic';
@@ -733,14 +732,14 @@ export default async function GameDetailPage({ params }: PageProps) {
                 AI Analysis
               </h3>
               <div className="w-48">
-                <AIAnalysisButton
+                <LazyAIAnalysisButton
                   gameId={game.id}
                   hasClaudeAnalysis={game.ai_analyses.some(a => a.ai_provider === 'claude')}
                   hasGrokAnalysis={game.ai_analyses.some(a => a.ai_provider === 'grok')}
                 />
               </div>
             </div>
-            <AIAnalysisPanel analyses={game.ai_analyses} />
+            <LazyAIAnalysisPanel analyses={game.ai_analyses} />
           </div>
         </div>
       </main>
