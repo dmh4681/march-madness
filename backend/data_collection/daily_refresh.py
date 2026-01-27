@@ -205,7 +205,15 @@ if not ODDS_API_KEY:
     logger.warning("ODDS_API_KEY not configured - odds fetching will fail")
 
 # SECURITY: Import secure Supabase client with timeouts and validation
-from backend.api.supabase_client import get_supabase, _validate_uuid, _sanitize_string
+# PERFORMANCE: Import query timing utilities for monitoring
+from backend.api.supabase_client import (
+    get_supabase,
+    _validate_uuid,
+    _sanitize_string,
+    get_query_stats,
+    reset_query_stats,
+    query_timer,
+)
 
 # Import cache utilities for invalidation during refresh
 try:
@@ -367,127 +375,129 @@ def process_odds_data(odds_data: list[dict]) -> dict:
     games_updated = 0
     spreads_inserted = 0
 
-    for game in odds_data:
-        try:
-            home_team = game.get("home_team", "")
-            away_team = game.get("away_team", "")
-            commence_time = game.get("commence_time", "")
+    # Time the entire batch processing
+    with query_timer("process_odds_data_batch"):
+        for game in odds_data:
+            try:
+                home_team = game.get("home_team", "")
+                away_team = game.get("away_team", "")
+                commence_time = game.get("commence_time", "")
 
-            # Get team IDs
-            home_team_id = get_team_id(home_team)
-            away_team_id = get_team_id(away_team)
+                # Get team IDs
+                home_team_id = get_team_id(home_team)
+                away_team_id = get_team_id(away_team)
 
-            if not home_team_id or not away_team_id:
-                # Try to create teams if they don't exist
-                continue
-
-            # Parse game date - IMPORTANT: Convert UTC to Eastern time before extracting date
-            # This ensures a game at 11 PM Eastern shows up on the correct day
-            # (not the next day due to UTC being 4-5 hours ahead)
-            game_date = None
-            if commence_time:
-                # Parse UTC time from API
-                utc_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
-                # Convert to Eastern time, then extract the date
-                eastern_time = utc_time.astimezone(EASTERN_TZ)
-                game_date = eastern_time.date().isoformat()
-
-            # Find or create game
-            game_result = client.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
-
-            if game_result.data:
-                game_id = game_result.data[0]["id"]
-            else:
-                # Create new game
-                new_game = {
-                    "external_id": game.get("id", f"{home_team_id}-{away_team_id}-{game_date}"),
-                    "date": game_date,
-                    "season": 2025,  # Current season
-                    "home_team_id": home_team_id,
-                    "away_team_id": away_team_id,
-                    "is_conference_game": False,  # Would need to determine this
-                    "status": "scheduled",
-                }
-                insert_result = client.table("games").insert(new_game).execute()
-                if insert_result.data:
-                    game_id = insert_result.data[0]["id"]
-                    games_updated += 1
-                else:
+                if not home_team_id or not away_team_id:
+                    # Try to create teams if they don't exist
                     continue
 
-            # Extract spread data from bookmakers
-            home_spread = None
-            home_ml = None
-            away_ml = None
-            over_under = None
+                # Parse game date - IMPORTANT: Convert UTC to Eastern time before extracting date
+                # This ensures a game at 11 PM Eastern shows up on the correct day
+                # (not the next day due to UTC being 4-5 hours ahead)
+                game_date = None
+                if commence_time:
+                    # Parse UTC time from API
+                    utc_time = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+                    # Convert to Eastern time, then extract the date
+                    eastern_time = utc_time.astimezone(EASTERN_TZ)
+                    game_date = eastern_time.date().isoformat()
 
-            # Helper to match team names flexibly
-            def teams_match(api_name: str, target_name: str) -> bool:
-                if not api_name or not target_name:
+                # Find or create game
+                game_result = client.table("games").select("id").eq("home_team_id", home_team_id).eq("away_team_id", away_team_id).eq("date", game_date).execute()
+
+                if game_result.data:
+                    game_id = game_result.data[0]["id"]
+                else:
+                    # Create new game
+                    new_game = {
+                        "external_id": game.get("id", f"{home_team_id}-{away_team_id}-{game_date}"),
+                        "date": game_date,
+                        "season": 2025,  # Current season
+                        "home_team_id": home_team_id,
+                        "away_team_id": away_team_id,
+                        "is_conference_game": False,  # Would need to determine this
+                        "status": "scheduled",
+                    }
+                    insert_result = client.table("games").insert(new_game).execute()
+                    if insert_result.data:
+                        game_id = insert_result.data[0]["id"]
+                        games_updated += 1
+                    else:
+                        continue
+
+                # Extract spread data from bookmakers
+                home_spread = None
+                home_ml = None
+                away_ml = None
+                over_under = None
+
+                # Helper to match team names flexibly
+                def teams_match(api_name: str, target_name: str) -> bool:
+                    if not api_name or not target_name:
+                        return False
+                    # Exact match
+                    if api_name == target_name:
+                        return True
+                    # Normalize both names for comparison
+                    api_lower = api_name.lower()
+                    target_lower = target_name.lower()
+                    # Check if one contains the other (e.g., "Duke Blue Devils" contains "Duke")
+                    if api_lower in target_lower or target_lower in api_lower:
+                        return True
+                    # Check first word match (school name)
+                    api_first = api_lower.split()[0] if api_lower.split() else ""
+                    target_first = target_lower.split()[0] if target_lower.split() else ""
+                    if api_first and target_first and api_first == target_first:
+                        return True
                     return False
-                # Exact match
-                if api_name == target_name:
-                    return True
-                # Normalize both names for comparison
-                api_lower = api_name.lower()
-                target_lower = target_name.lower()
-                # Check if one contains the other (e.g., "Duke Blue Devils" contains "Duke")
-                if api_lower in target_lower or target_lower in api_lower:
-                    return True
-                # Check first word match (school name)
-                api_first = api_lower.split()[0] if api_lower.split() else ""
-                target_first = target_lower.split()[0] if target_lower.split() else ""
-                if api_first and target_first and api_first == target_first:
-                    return True
-                return False
 
-            for bookmaker in game.get("bookmakers", []):
-                for market in bookmaker.get("markets", []):
-                    if market.get("key") == "spreads" and home_spread is None:
-                        for outcome in market.get("outcomes", []):
-                            if teams_match(outcome.get("name"), home_team):
-                                home_spread = outcome.get("point")
+                for bookmaker in game.get("bookmakers", []):
+                    for market in bookmaker.get("markets", []):
+                        if market.get("key") == "spreads" and home_spread is None:
+                            for outcome in market.get("outcomes", []):
+                                if teams_match(outcome.get("name"), home_team):
+                                    home_spread = outcome.get("point")
 
-                    elif market.get("key") == "h2h":
-                        for outcome in market.get("outcomes", []):
-                            outcome_name = outcome.get("name", "")
-                            if home_ml is None and teams_match(outcome_name, home_team):
-                                home_ml = outcome.get("price")
-                            elif away_ml is None and teams_match(outcome_name, away_team):
-                                away_ml = outcome.get("price")
+                        elif market.get("key") == "h2h":
+                            for outcome in market.get("outcomes", []):
+                                outcome_name = outcome.get("name", "")
+                                if home_ml is None and teams_match(outcome_name, home_team):
+                                    home_ml = outcome.get("price")
+                                elif away_ml is None and teams_match(outcome_name, away_team):
+                                    away_ml = outcome.get("price")
 
-                    elif market.get("key") == "totals" and over_under is None:
-                        for outcome in market.get("outcomes", []):
-                            if outcome.get("name") == "Over":
-                                over_under = outcome.get("point")
+                        elif market.get("key") == "totals" and over_under is None:
+                            for outcome in market.get("outcomes", []):
+                                if outcome.get("name") == "Over":
+                                    over_under = outcome.get("point")
 
-                # Stop once we have all data we need
-                if home_spread is not None and home_ml is not None and away_ml is not None:
-                    break
+                    # Stop once we have all data we need
+                    if home_spread is not None and home_ml is not None and away_ml is not None:
+                        break
 
-            # Insert spread record
-            if home_spread is not None:
-                spread_data = {
-                    "game_id": game_id,
-                    "home_spread": home_spread,
-                    "away_spread": -home_spread if home_spread else None,
-                    "home_ml": home_ml,
-                    "away_ml": away_ml,
-                    "over_under": over_under,
-                    "source": "odds-api",
-                    "is_closing_line": False,
-                }
+                # Insert spread record
+                if home_spread is not None:
+                    spread_data = {
+                        "game_id": game_id,
+                        "home_spread": home_spread,
+                        "away_spread": -home_spread if home_spread else None,
+                        "home_ml": home_ml,
+                        "away_ml": away_ml,
+                        "over_under": over_under,
+                        "source": "odds-api",
+                        "is_closing_line": False,
+                    }
 
-                # Log if moneyline is missing
-                if home_ml is None or away_ml is None:
-                    print(f"  Warning: Missing ML for {away_team} @ {home_team} (home_ml={home_ml}, away_ml={away_ml})")
+                    # Log if moneyline is missing
+                    if home_ml is None or away_ml is None:
+                        print(f"  Warning: Missing ML for {away_team} @ {home_team} (home_ml={home_ml}, away_ml={away_ml})")
 
-                client.table("spreads").insert(spread_data).execute()
-                spreads_inserted += 1
+                    client.table("spreads").insert(spread_data).execute()
+                    spreads_inserted += 1
 
-        except Exception as e:
-            print(f"  Error processing game: {e}")
-            continue
+            except Exception as e:
+                print(f"  Error processing game: {e}")
+                continue
 
     print(f"Games created/updated: {games_updated}")
     print(f"Spreads inserted: {spreads_inserted}")
@@ -545,16 +555,19 @@ def run_predictions(force_regenerate: bool = False) -> dict:
     if force_regenerate:
         print("Force regenerate enabled - deleting existing predictions for upcoming games...")
         # Get all upcoming game IDs first
-        upcoming = client.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
+        with query_timer("get_upcoming_games_for_predictions"):
+            upcoming = client.table("games").select("id").gte("date", today).is_("home_score", "null").execute()
         if upcoming.data:
             game_ids = [g["id"] for g in upcoming.data]
-            for gid in game_ids:
-                client.table("predictions").delete().eq("game_id", gid).execute()
+            with query_timer("delete_existing_predictions"):
+                for gid in game_ids:
+                    client.table("predictions").delete().eq("game_id", gid).execute()
             print(f"  Deleted predictions for {len(game_ids)} games")
 
-    result = client.table("games").select(
-        "id, date, home_team_id, away_team_id, is_conference_game"
-    ).gte("date", today).is_("home_score", "null").execute()
+    with query_timer("get_games_for_predictions"):
+        result = client.table("games").select(
+            "id, date, home_team_id, away_team_id, is_conference_game"
+        ).gte("date", today).is_("home_score", "null").execute()
 
     if not result.data:
         print("No upcoming games to predict")
@@ -837,6 +850,10 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
         print("*** FORCE REGENERATE PREDICTIONS ENABLED ***")
     print("=" * 60)
 
+    # Reset query statistics for this refresh cycle
+    reset_query_stats()
+    refresh_start_time = datetime.now()
+
     results = {
         "timestamp": datetime.now().isoformat(),
         "status": "success",
@@ -915,9 +932,27 @@ def run_daily_refresh(force_regenerate_predictions: bool = False) -> dict:
           f"misses={cache_stats.get('misses', 0)}, "
           f"hit_rate={cache_stats.get('hit_rate_pct', 0):.1f}%")
 
+    # Log query performance statistics
+    query_stats = get_query_stats()
+    results["query_stats"] = query_stats
+
+    refresh_duration = (datetime.now() - refresh_start_time).total_seconds()
+    results["refresh_duration_seconds"] = round(refresh_duration, 2)
+
+    print("\n=== Query Performance Statistics ===")
+    print(f"Total queries: {query_stats.get('total_queries', 0)}")
+    print(f"Total query time: {query_stats.get('total_time_ms', 0):.0f}ms")
+    print(f"Average query time: {query_stats.get('avg_time_ms', 0):.2f}ms")
+    print(f"Slow queries (>1000ms): {query_stats.get('slow_queries', 0)} "
+          f"({query_stats.get('slow_query_pct', 0):.1f}%)")
+    if query_stats.get('slowest_query_name'):
+        print(f"Slowest query: {query_stats.get('slowest_query_name')} "
+              f"({query_stats.get('slowest_query_ms', 0):.0f}ms)")
+
     print("\n" + "=" * 60)
     print("Daily Refresh Complete")
     print(f"Finished at: {datetime.now().isoformat()}")
+    print(f"Total duration: {refresh_duration:.1f} seconds")
     print("=" * 60)
 
     return results

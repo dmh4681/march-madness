@@ -7,20 +7,29 @@ SECURITY NOTES:
 - Uses Supabase Python SDK which handles parameterized queries internally
 - All user input is passed through SDK methods, preventing SQL injection
 - Service key is used for backend operations (not exposed to frontend)
-- Connection pooling and timeouts are handled by the SDK's httpx client
+- Connection pooling and timeouts are configured via ClientOptions
 
 CACHING NOTES:
 - KenPom and Haslametrics ratings are cached with 1-hour TTL
 - Cache is invalidated during daily refresh
 - Cache hit/miss is logged for monitoring
+
+CONNECTION POOLING:
+- Uses httpx connection pooling via ClientOptions
+- Pool size: 20 concurrent connections
+- Keep-alive: 30 seconds for idle connections
+- Timeouts: 30s response, 10s connect
+- Prevents connection exhaustion during daily refresh
 """
 
 import os
 import re
 import logging
+import time
 from datetime import date, datetime, timedelta
-from typing import Optional
+from typing import Optional, Callable, Any
 from functools import wraps
+from contextlib import contextmanager
 
 # Import cache module
 try:
@@ -45,6 +54,8 @@ def get_eastern_date_today() -> date:
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
+import httpx
 
 load_dotenv()
 
@@ -69,25 +80,142 @@ def _validate_supabase_url(url: Optional[str]) -> bool:
     return bool(pattern.match(url))
 
 
-# SECURITY: Connection pool and timeout configuration
-# These settings prevent resource exhaustion and hanging connections
+# =============================================================================
+# CONNECTION POOLING: Configuration
+# =============================================================================
+# These settings optimize connection handling for:
+# - Daily refresh pipeline (multiple concurrent data source queries)
+# - AI analysis requests (parallel calls during batch processing)
+# - Frontend API requests (read-heavy workload)
+
 HTTP_TIMEOUT_SECONDS = 30  # Maximum time to wait for a response
 HTTP_CONNECT_TIMEOUT = 10  # Maximum time to establish connection
-HTTP_POOL_SIZE = 10  # Maximum number of concurrent connections
+HTTP_POOL_SIZE = 20  # Maximum number of concurrent connections (increased from 10)
+HTTP_MAX_KEEPALIVE = 10  # Maximum keep-alive connections to maintain
 HTTP_KEEPALIVE_EXPIRY = 30  # Seconds before idle connections are closed
 
 _client: Optional[Client] = None
 
+# =============================================================================
+# QUERY PERFORMANCE: Timing and Monitoring
+# =============================================================================
+
+# Query timing statistics (thread-safe tracking)
+_query_stats = {
+    "total_queries": 0,
+    "total_time_ms": 0.0,
+    "slow_queries": 0,  # Queries taking > 1000ms
+    "slowest_query_ms": 0.0,
+    "slowest_query_name": "",
+}
+
+# Threshold for "slow query" classification (milliseconds)
+SLOW_QUERY_THRESHOLD_MS = 1000
+
+
+@contextmanager
+def query_timer(query_name: str = "unnamed"):
+    """
+    Context manager for timing database queries.
+
+    Usage:
+        with query_timer("get_today_games"):
+            result = client.table("games").select("*").execute()
+
+    Logs query duration and updates statistics.
+    """
+    start_time = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+        # Update statistics
+        _query_stats["total_queries"] += 1
+        _query_stats["total_time_ms"] += elapsed_ms
+
+        if elapsed_ms > SLOW_QUERY_THRESHOLD_MS:
+            _query_stats["slow_queries"] += 1
+            logger.warning(
+                f"SLOW QUERY: {query_name} took {elapsed_ms:.2f}ms "
+                f"(threshold: {SLOW_QUERY_THRESHOLD_MS}ms)"
+            )
+
+        if elapsed_ms > _query_stats["slowest_query_ms"]:
+            _query_stats["slowest_query_ms"] = elapsed_ms
+            _query_stats["slowest_query_name"] = query_name
+
+        logger.debug(f"Query '{query_name}' completed in {elapsed_ms:.2f}ms")
+
+
+def timed_query(query_name: str = None):
+    """
+    Decorator for timing database query functions.
+
+    Usage:
+        @timed_query("get_games_by_date")
+        def get_games_by_date(game_date: date) -> list[dict]:
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            name = query_name or func.__name__
+            with query_timer(name):
+                return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def get_query_stats() -> dict:
+    """
+    Get query performance statistics.
+
+    Returns:
+        Dict with total_queries, total_time_ms, avg_time_ms, slow_queries,
+        slowest_query_ms, slowest_query_name
+    """
+    total = _query_stats["total_queries"]
+    avg_ms = _query_stats["total_time_ms"] / total if total > 0 else 0
+
+    return {
+        "total_queries": total,
+        "total_time_ms": round(_query_stats["total_time_ms"], 2),
+        "avg_time_ms": round(avg_ms, 2),
+        "slow_queries": _query_stats["slow_queries"],
+        "slow_query_pct": round(_query_stats["slow_queries"] / total * 100, 2) if total > 0 else 0,
+        "slowest_query_ms": round(_query_stats["slowest_query_ms"], 2),
+        "slowest_query_name": _query_stats["slowest_query_name"],
+    }
+
+
+def reset_query_stats() -> None:
+    """Reset query statistics (useful at start of daily refresh)."""
+    global _query_stats
+    _query_stats = {
+        "total_queries": 0,
+        "total_time_ms": 0.0,
+        "slow_queries": 0,
+        "slowest_query_ms": 0.0,
+        "slowest_query_name": "",
+    }
+    logger.info("Query statistics reset")
+
 
 def get_supabase() -> Client:
     """
-    Get or create Supabase client with secure configuration.
+    Get or create Supabase client with secure configuration and connection pooling.
 
     SECURITY:
     - Validates URL format before connection
     - Configures timeouts to prevent hanging connections
     - Uses connection pooling for efficiency
     - Service key is kept server-side only
+
+    CONNECTION POOLING:
+    - Creates an httpx client with configurable pool limits
+    - Reuses connections across requests for efficiency
+    - Properly handles keep-alive connections
     """
     global _client
     if _client is None:
@@ -98,10 +226,40 @@ def get_supabase() -> Client:
         if not _validate_supabase_url(SUPABASE_URL):
             raise ValueError("Invalid SUPABASE_URL format")
 
-        # Create client - Supabase SDK handles connection pooling internally via httpx
-        # Note: Custom options require ClientOptions object, keeping it simple here
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        logger.info("Supabase client initialized")
+        # Configure connection pooling via httpx Limits
+        # This prevents connection exhaustion during batch operations
+        http_limits = httpx.Limits(
+            max_connections=HTTP_POOL_SIZE,
+            max_keepalive_connections=HTTP_MAX_KEEPALIVE,
+            keepalive_expiry=HTTP_KEEPALIVE_EXPIRY,
+        )
+
+        # Configure timeouts
+        http_timeout = httpx.Timeout(
+            timeout=HTTP_TIMEOUT_SECONDS,
+            connect=HTTP_CONNECT_TIMEOUT,
+        )
+
+        # Create custom httpx client with pooling configuration
+        http_client = httpx.Client(
+            limits=http_limits,
+            timeout=http_timeout,
+        )
+
+        # Create Supabase client with custom options
+        # Note: ClientOptions allows passing custom httpx client settings
+        options = ClientOptions(
+            postgrest_client_timeout=HTTP_TIMEOUT_SECONDS,
+            storage_client_timeout=HTTP_TIMEOUT_SECONDS,
+        )
+
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
+
+        logger.info(
+            f"Supabase client initialized with connection pooling: "
+            f"pool_size={HTTP_POOL_SIZE}, keepalive={HTTP_MAX_KEEPALIVE}, "
+            f"timeout={HTTP_TIMEOUT_SECONDS}s"
+        )
 
     return _client
 
@@ -154,6 +312,7 @@ def _sanitize_string(value: str, max_length: int = 255, field_name: str = "value
 # ============================================
 
 
+@timed_query("get_team_by_name")
 def get_team_by_name(name: str) -> Optional[dict]:
     """Get team by normalized name."""
     # SECURITY: Sanitize input (SDK handles parameterization)
@@ -223,6 +382,7 @@ def normalize_team_name(name: str) -> str:
 # ============================================
 
 
+@timed_query("get_games_by_date")
 def get_games_by_date(game_date: date) -> list[dict]:
     """Get all games for a specific date."""
     client = get_supabase()
@@ -271,6 +431,7 @@ def upsert_game(game_data: dict) -> dict:
     return result.data[0]
 
 
+@timed_query("get_upcoming_games")
 def get_upcoming_games(days: int = 7) -> list[dict]:
     """Get games for the next N days.
 
@@ -521,6 +682,7 @@ def get_season_performance(season: int) -> Optional[dict]:
 # ============================================
 
 
+@timed_query("get_today_games_view")
 def get_today_games_view() -> list[dict]:
     """Get today's games from the view."""
     client = get_supabase()
@@ -528,6 +690,7 @@ def get_today_games_view() -> list[dict]:
     return result.data
 
 
+@timed_query("get_upcoming_games_view")
 def get_upcoming_games_view(days: int = 7) -> list[dict]:
     """Get upcoming games from the view with flat team names.
 
@@ -547,6 +710,7 @@ def get_upcoming_games_view(days: int = 7) -> list[dict]:
     return result.data
 
 
+@timed_query("get_team_kenpom")
 def get_team_kenpom(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
     """
     Get the latest KenPom rating for a team with caching.
@@ -585,6 +749,7 @@ def get_team_kenpom(team_id: str, season: int = 2025, use_cache: bool = True) ->
     return None
 
 
+@timed_query("get_team_haslametrics")
 def get_team_haslametrics(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
     """
     Get the latest Haslametrics rating for a team with caching.

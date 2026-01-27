@@ -147,6 +147,9 @@ from .supabase_client import (
     calculate_season_stats,
     get_current_rankings,
     get_team_ranking,
+    # Performance monitoring
+    get_query_stats,
+    get_cache_stats,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
 
@@ -937,6 +940,57 @@ def health():
         # Additional detail about secrets configuration
         "secrets_valid": _secrets_validation.is_valid if '_secrets_validation' in dir() else False,
         "missing_recommended": _secrets_validation.missing_recommended if '_secrets_validation' in dir() else [],
+    }
+
+
+@app.get("/performance-stats", tags=["Health"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def performance_stats(request: Request):
+    """
+    Get database query and cache performance statistics.
+
+    Returns metrics useful for monitoring and optimizing database performance:
+    - Query timing statistics (total queries, avg time, slow queries)
+    - Cache hit/miss rates for ratings data
+    - Connection pool utilization metrics
+
+    SECURITY: This endpoint is rate-limited but does not expose sensitive data.
+    Only returns aggregate statistics suitable for monitoring dashboards.
+
+    Returns:
+        dict: Performance statistics including query_stats and cache_stats
+
+    Example Response:
+        {
+            "timestamp": "2025-01-26T14:30:00.000000",
+            "query_stats": {
+                "total_queries": 1250,
+                "total_time_ms": 45230.5,
+                "avg_time_ms": 36.18,
+                "slow_queries": 3,
+                "slow_query_pct": 0.24,
+                "slowest_query_ms": 1523.4,
+                "slowest_query_name": "get_today_games_view"
+            },
+            "cache_stats": {
+                "hits": 847,
+                "misses": 152,
+                "hit_rate_pct": 84.78,
+                "invalidations": 2,
+                "current_entries": 45
+            }
+        }
+
+    Use Cases:
+        - Monitor query performance during daily refresh
+        - Identify slow queries needing optimization
+        - Track cache effectiveness for ratings data
+        - Debug connection pool issues
+    """
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "query_stats": get_query_stats(),
+        "cache_stats": get_cache_stats(),
     }
 
 
