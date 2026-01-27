@@ -13,7 +13,6 @@ import argparse
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -106,7 +105,7 @@ def scrape_season_games(season: int, chunk_days: int = 14) -> pd.DataFrame:
     return df
 
 
-def extract_game_data(game_row, season: int) -> Optional[dict]:
+def extract_game_data(game_row, season: int) -> dict | None:
     """
     Extract relevant fields from CBBpy game row.
     Returns None if data is invalid.
@@ -210,17 +209,19 @@ def save_games_to_db(df: pd.DataFrame):
         print("No games to save")
         return
 
-    conn = get_connection()
-
     # Convert boolean to int for SQLite
     df = df.copy()
     df["same_conference"] = df["same_conference"].astype(int)
     df["ranked_vs_unranked"] = df["ranked_vs_unranked"].astype(int)
 
-    # Insert with replace on conflict
-    df.to_sql("games", conn, if_exists="append", index=False)
-    conn.commit()
-    conn.close()
+    # Use context manager for proper connection handling
+    conn = get_connection()
+    try:
+        # Insert with replace on conflict
+        df.to_sql("games", conn, if_exists="append", index=False)
+        conn.commit()
+    finally:
+        conn.close()
     print(f"Saved {len(df)} games to database")
 
 

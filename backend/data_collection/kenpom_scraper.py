@@ -42,7 +42,6 @@ import logging
 import os
 import sys
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -158,7 +157,7 @@ def normalize_team_name(name: str) -> str:
     return result.strip("-")
 
 
-def get_team_id(team_name: str) -> Optional[str]:
+def get_team_id(team_name: str) -> str | None:
     """
     Get team UUID from our database by matching normalized name.
 
@@ -214,7 +213,7 @@ def get_team_id(team_name: str) -> Optional[str]:
     return None
 
 
-def _fetch_kenpom_ratings_uncached(season: int = 2025) -> Optional[pd.DataFrame]:
+def _fetch_kenpom_ratings_uncached(season: int = 2025) -> pd.DataFrame | None:
     """
     Internal function to fetch KenPom ratings without caching.
 
@@ -295,7 +294,7 @@ def _fetch_kenpom_ratings_uncached(season: int = 2025) -> Optional[pd.DataFrame]
         return None
 
 
-def fetch_kenpom_ratings(season: int = 2025, use_cache: bool = True) -> Optional[pd.DataFrame]:
+def fetch_kenpom_ratings(season: int = 2025, use_cache: bool = True) -> pd.DataFrame | None:
     """
     Fetch KenPom Pomeroy ratings for a season with caching.
 
@@ -331,7 +330,7 @@ def fetch_kenpom_ratings(season: int = 2025, use_cache: bool = True) -> Optional
     return ratings
 
 
-def fetch_kenpom_fourfactors(season: int = 2025) -> Optional[pd.DataFrame]:
+def fetch_kenpom_fourfactors(season: int = 2025) -> pd.DataFrame | None:
     """Fetch Four Factors data from KenPom."""
     if not KENPOM_EMAIL or not KENPOM_PASSWORD:
         return None
@@ -489,7 +488,7 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
     return {"inserted": inserted, "skipped": skipped, "errors": errors}
 
 
-def safe_int(value) -> Optional[int]:
+def safe_int(value) -> int | None:
     """Safely convert to int."""
     if pd.isna(value) or value is None or value == "":
         return None
@@ -499,7 +498,7 @@ def safe_int(value) -> Optional[int]:
         return None
 
 
-def safe_float(value) -> Optional[float]:
+def safe_float(value) -> float | None:
     """Safely convert to float."""
     if pd.isna(value) or value is None or value == "":
         return None
@@ -509,7 +508,7 @@ def safe_float(value) -> Optional[float]:
         return None
 
 
-def get_team_kenpom_rating(team_id: str, season: int = 2025, use_cache: bool = True) -> Optional[dict]:
+def get_team_kenpom_rating(team_id: str, season: int = 2025, use_cache: bool = True) -> dict | None:
     """
     Get the latest KenPom rating for a team with caching.
 

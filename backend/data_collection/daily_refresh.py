@@ -156,7 +156,6 @@ import sys
 import re
 import logging
 from datetime import datetime, date, timedelta
-from typing import Optional
 import json
 
 import requests
@@ -292,7 +291,7 @@ def normalize_team_name(name: str) -> str:
     return result.replace(" ", "-").replace("'", "").replace(".", "").replace("state", "-state").strip("-")
 
 
-def get_team_id(name: str) -> Optional[str]:
+def get_team_id(name: str) -> str | None:
     """
     Get team ID from normalized name.
 
