@@ -226,31 +226,11 @@ def get_supabase() -> Client:
         if not _validate_supabase_url(SUPABASE_URL):
             raise ValueError("Invalid SUPABASE_URL format")
 
-        # Configure connection pooling via httpx Limits
-        # This prevents connection exhaustion during batch operations
-        http_limits = httpx.Limits(
-            max_connections=HTTP_POOL_SIZE,
-            max_keepalive_connections=HTTP_MAX_KEEPALIVE,
-            keepalive_expiry=HTTP_KEEPALIVE_EXPIRY,
-        )
-
-        # Configure timeouts
-        http_timeout = httpx.Timeout(
-            timeout=HTTP_TIMEOUT_SECONDS,
-            connect=HTTP_CONNECT_TIMEOUT,
-        )
-
-        # Create custom httpx client with pooling configuration
-        http_client = httpx.Client(
-            limits=http_limits,
-            timeout=http_timeout,
-        )
-
-        # Create Supabase client with custom options
-        # Note: ClientOptions allows passing custom httpx client settings
+        # Create Supabase client with timeout
+        # Note: storage_client_timeout causes "'ClientOptions' object has no attribute 'storage'"
+        # in supabase-py 2.x, so we only set postgrest timeout.
         options = ClientOptions(
             postgrest_client_timeout=HTTP_TIMEOUT_SECONDS,
-            storage_client_timeout=HTTP_TIMEOUT_SECONDS,
         )
 
         _client = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
