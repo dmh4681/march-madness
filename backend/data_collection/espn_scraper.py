@@ -303,7 +303,9 @@ def create_games_from_espn(days: int = 7) -> dict:
                 tip_time_eastern = tip_time_utc.astimezone(EASTERN_TZ)
                 game_date = tip_time_eastern.date().isoformat()
 
-                # Check if game already exists
+                espn_external_id = f"espn-{espn_game['espn_id']}"
+
+                # Check if game already exists - try by team matchup + date first
                 existing = client.table("games").select("id, tip_time").eq(
                     "home_team_id", home_team_id
                 ).eq(
@@ -312,27 +314,30 @@ def create_games_from_espn(days: int = 7) -> dict:
                     "date", game_date
                 ).execute()
 
-                if existing.data:
-                    # Update tip time if needed
-                    game_id = existing.data[0]["id"]
-                    existing_tip = existing.data[0].get("tip_time")
+                if not existing.data:
+                    # Also try by external_id (handles fuzzy matching inconsistencies)
+                    existing = client.table("games").select("id, tip_time").eq(
+                        "external_id", espn_external_id
+                    ).execute()
 
-                    # Always update tip_time from ESPN (it's authoritative)
+                if existing.data:
+                    # Update tip time (ESPN is authoritative)
+                    game_id = existing.data[0]["id"]
                     client.table("games").update({
                         "tip_time": tip_time_utc.isoformat(),
-                        "external_id": f"espn-{espn_game['espn_id']}",
+                        "external_id": espn_external_id,
                     }).eq("id", game_id).execute()
                     results["games_updated"] += 1
                 else:
                     # Create new game
                     new_game = {
-                        "external_id": f"espn-{espn_game['espn_id']}",
+                        "external_id": espn_external_id,
                         "date": game_date,
                         "tip_time": tip_time_utc.isoformat(),
                         "season": 2025,
                         "home_team_id": home_team_id,
                         "away_team_id": away_team_id,
-                        "is_conference_game": False,  # Could determine from team conferences
+                        "is_conference_game": False,
                         "status": "scheduled",
                     }
                     client.table("games").insert(new_game).execute()
