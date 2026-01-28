@@ -175,19 +175,11 @@ def fetch_espn_schedule(target_date: date) -> list[dict]:
                 for competitor in competitors:
                     team = competitor.get("team", {})
                     team_display = team.get("displayName", "")
-                    team_mascot = team.get("name", "")  # ESPN "name" = mascot only
-                    team_short = team.get("shortDisplayName", "")
                     is_home = competitor.get("homeAway") == "home"
 
-                    # Best approach: strip the mascot from displayName using ESPN's own data
-                    # e.g., "Arkansas State Red Wolves" - "Red Wolves" = "Arkansas State"
-                    if team_display and team_mascot and len(team_mascot) > 0 and team_display.endswith(team_mascot):
-                        stripped = team_display[:-len(team_mascot)].strip()
-                        school_name = stripped if stripped else (team_short or team_display)
-                    else:
-                        school_name = team_short or team_display
-
-                    normalized = normalize_espn_team_name(school_name)
+                    # Pass full displayName (e.g., "Butler Bulldogs")
+                    # Team lookup will use the same normalization as Odds API
+                    normalized = team_display
 
                     if is_home:
                         home_team = normalized
@@ -258,6 +250,7 @@ def create_games_from_espn(days: int = 7) -> dict:
         dict with counts of games created, updated, etc.
     """
     from backend.api.supabase_client import get_supabase
+    from backend.data_collection.daily_refresh import get_team_id
 
     client = get_supabase()
     today = datetime.now(EASTERN_TZ).date()
@@ -284,9 +277,10 @@ def create_games_from_espn(days: int = 7) -> dict:
 
         for espn_game in espn_games:
             try:
-                # Look up team IDs
-                home_team_id = get_team_id_by_normalized_name(client, espn_game["home_team"])
-                away_team_id = get_team_id_by_normalized_name(client, espn_game["away_team"])
+                # Look up team IDs using the same function as Odds API
+                # ESPN passes full displayName like "Butler Bulldogs"
+                home_team_id = get_team_id(espn_game["home_team"])
+                away_team_id = get_team_id(espn_game["away_team"])
 
                 if not home_team_id or not away_team_id:
                     results["teams_not_found"] += 1
