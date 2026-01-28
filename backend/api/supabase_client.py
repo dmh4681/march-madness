@@ -54,8 +54,6 @@ def get_eastern_date_today() -> date:
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
-import httpx
 
 load_dotenv()
 
@@ -226,20 +224,11 @@ def get_supabase() -> Client:
         if not _validate_supabase_url(SUPABASE_URL):
             raise ValueError("Invalid SUPABASE_URL format")
 
-        # Create Supabase client with timeout
-        # Note: storage_client_timeout causes "'ClientOptions' object has no attribute 'storage'"
-        # in supabase-py 2.x, so we only set postgrest timeout.
-        options = ClientOptions(
-            postgrest_client_timeout=HTTP_TIMEOUT_SECONDS,
-        )
+        # Create Supabase client with default options
+        # ClientOptions with custom timeouts causes attribute errors in supabase-py 2.x
+        _client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-        _client = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
-
-        logger.info(
-            f"Supabase client initialized with connection pooling: "
-            f"pool_size={HTTP_POOL_SIZE}, keepalive={HTTP_MAX_KEEPALIVE}, "
-            f"timeout={HTTP_TIMEOUT_SECONDS}s"
-        )
+        logger.info("Supabase client initialized successfully")
 
     return _client
 
