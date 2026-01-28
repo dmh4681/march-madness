@@ -98,6 +98,7 @@ from .middleware import (
     RATE_LIMIT_STANDARD_ENDPOINTS,
 )
 from slowapi.errors import RateLimitExceeded
+from backend.utils.env_validator import validate_environment
 
 # Import secrets validator
 from .secrets_validator import (
@@ -424,6 +425,14 @@ app.add_exception_handler(ApiException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(Exception, general_exception_handler)
+
+
+# =============================================================================
+# STARTUP: Environment Validation
+# =============================================================================
+@app.on_event("startup")
+async def startup_validate_env():
+    validate_environment()
 
 
 # ============================================

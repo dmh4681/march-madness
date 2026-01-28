@@ -18,7 +18,9 @@ Usage:
     ratings_cache.invalidate_all()       # Clear all caches
 """
 
+import json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -26,6 +28,29 @@ from typing import Any, Dict, Optional, Callable
 from functools import wraps
 
 logger = logging.getLogger(__name__)
+
+# Optional Redis support
+_redis_client = None
+
+
+def _init_redis():
+    """Try to connect to Redis. Returns client or None."""
+    global _redis_client
+    redis_url = os.getenv("REDIS_URL")
+    if redis_url:
+        try:
+            import redis
+            _redis_client = redis.from_url(redis_url, decode_responses=True, socket_connect_timeout=2)
+            _redis_client.ping()
+            logger.info("Cache: Connected to Redis")
+        except Exception as e:
+            logger.warning(f"Cache: Redis unavailable ({e}), using in-memory cache")
+            _redis_client = None
+    else:
+        logger.info("Cache: No REDIS_URL set, using in-memory cache")
+
+
+_init_redis()
 
 # Default TTL: 1 hour
 DEFAULT_TTL_SECONDS = 3600
@@ -91,6 +116,21 @@ class TTLCache:
         """
         key = self._make_key(prefix, **kwargs)
 
+        # Try Redis first if available
+        if _redis_client is not None:
+            try:
+                raw = _redis_client.get(f"cc:{key}")
+                if raw is not None:
+                    self._stats["hits"] += 1
+                    logger.debug(f"Cache HIT (Redis): {key}")
+                    return json.loads(raw)
+                else:
+                    self._stats["misses"] += 1
+                    logger.debug(f"Cache MISS (Redis): {key}")
+                    return None
+            except Exception as e:
+                logger.warning(f"Redis GET error for {key}: {e}, falling back to in-memory")
+
         with self._lock:
             entry = self._cache.get(key)
 
@@ -130,6 +170,15 @@ class TTLCache:
         key = self._make_key(prefix, **kwargs)
         ttl_seconds = ttl if ttl is not None else self._default_ttl
         expires_at = datetime.now() + timedelta(seconds=ttl_seconds)
+
+        # Try Redis first if available
+        if _redis_client is not None:
+            try:
+                _redis_client.setex(f"cc:{key}", ttl_seconds, json.dumps(value, default=str))
+                logger.debug(f"Cache SET (Redis): {key} (TTL: {ttl_seconds}s)")
+                return
+            except Exception as e:
+                logger.warning(f"Redis SET error for {key}: {e}, falling back to in-memory")
 
         with self._lock:
             self._cache[key] = CacheEntry(
