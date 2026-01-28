@@ -181,8 +181,9 @@ def fetch_espn_schedule(target_date: date) -> list[dict]:
 
                     # Best approach: strip the mascot from displayName using ESPN's own data
                     # e.g., "Arkansas State Red Wolves" - "Red Wolves" = "Arkansas State"
-                    if team_display and team_mascot and team_display.endswith(team_mascot):
-                        school_name = team_display[:-len(team_mascot)].strip()
+                    if team_display and team_mascot and len(team_mascot) > 0 and team_display.endswith(team_mascot):
+                        stripped = team_display[:-len(team_mascot)].strip()
+                        school_name = stripped if stripped else (team_short or team_display)
                     else:
                         school_name = team_short or team_display
 
