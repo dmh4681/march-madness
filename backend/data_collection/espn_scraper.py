@@ -91,52 +91,29 @@ ESPN_TEAM_MAP = {
 
 def normalize_espn_team_name(name: str) -> str:
     """
-    Normalize ESPN team name to match our database format.
+    Normalize an ESPN school name (mascot already stripped) to match our database format.
+
+    Input is typically just the school name: "Arkansas State", "Butler", "Florida International"
+    Output should match our normalized_name format: "arkansas-state", "butler", "florida-international"
     """
     if not name:
         return ""
 
-    # Check direct mapping first
+    # Check direct mapping first (handles abbreviations like BYU, USC, etc.)
     if name in ESPN_TEAM_MAP:
         return ESPN_TEAM_MAP[name]
 
-    # Basic normalization
+    # Lowercase
     result = name.lower()
 
-    # Remove common suffixes/mascots
-    mascots = [
-        "wildcats", "tigers", "bears", "eagles", "bulldogs", "cardinals",
-        "cougars", "ducks", "gators", "hawks", "huskies", "jayhawks",
-        "knights", "lions", "longhorns", "mountaineers", "panthers",
-        "seminoles", "spartans", "tar heels", "terrapins", "volunteers",
-        "wolverines", "blue devils", "crimson tide", "fighting irish",
-        "hoosiers", "boilermakers", "buckeyes", "nittany lions",
-        "golden gophers", "badgers", "hawkeyes", "cornhuskers",
-        "razorbacks", "gamecocks", "commodores", "rebels", "aggies",
-        "bruins", "trojans", "beavers", "buffaloes", "sooners",
-        "red raiders", "horned frogs", "cyclones", "golden eagles",
-        "blue jays", "musketeers", "friars", "pirates", "braves",
-        "bobcats", "owls", "red storm", "orange", "wolfpack", "demon deacons",
-        "yellow jackets", "cavaliers", "hokies", "bearcats", "billikens",
-        "redhawks", "roadrunners", "jackrabbits", "bison", "pioneers",
-        "tommies", "thunderbirds", "penguins", "rockets", "falcons",
-        "screaming", "golden", "fighting", "lady", "blue", "red", "black",
-    ]
+    # Handle "St." and "St" abbreviations for "State" or "Saint"
+    # "Michigan St." → "michigan-state", but "St. John's" → "st.-john's" (kept as-is)
+    if result.endswith(" st.") or result.endswith(" st"):
+        base = result.rsplit(" ", 1)[0]
+        result = f"{base} state"
 
-    for mascot in mascots:
-        if result.endswith(f" {mascot}"):
-            result = result[:-len(mascot)-1]
-            break
-
-    # Handle "State" abbreviations - but only if not already "state"
-    # Be careful: "North Dakota State" should become "north-dakota-state", not "north-dakota-stateate"
-    if " st " in result and " state" not in result:
-        result = result.replace(" st ", " state ")
-    if result.endswith(" st") and not result.endswith(" state"):
-        result = result[:-3] + " state"
-
-    # Convert spaces to hyphens, remove punctuation
-    result = result.replace(" ", "-").replace("'", "").replace(".", "").strip("-")
+    # Convert spaces to hyphens, remove apostrophes but keep periods
+    result = result.replace(" ", "-").replace("'", "").strip("-")
 
     # Handle double hyphens
     while "--" in result:
@@ -197,10 +174,19 @@ def fetch_espn_schedule(target_date: date) -> list[dict]:
 
                 for competitor in competitors:
                     team = competitor.get("team", {})
-                    team_name = team.get("displayName") or team.get("name") or team.get("shortDisplayName")
+                    team_display = team.get("displayName", "")
+                    team_mascot = team.get("name", "")  # ESPN "name" = mascot only
+                    team_short = team.get("shortDisplayName", "")
                     is_home = competitor.get("homeAway") == "home"
 
-                    normalized = normalize_espn_team_name(team_name)
+                    # Best approach: strip the mascot from displayName using ESPN's own data
+                    # e.g., "Arkansas State Red Wolves" - "Red Wolves" = "Arkansas State"
+                    if team_display and team_mascot and team_display.endswith(team_mascot):
+                        school_name = team_display[:-len(team_mascot)].strip()
+                    else:
+                        school_name = team_short or team_display
+
+                    normalized = normalize_espn_team_name(school_name)
 
                     if is_home:
                         home_team = normalized
@@ -303,7 +289,11 @@ def create_games_from_espn(days: int = 7) -> dict:
 
                 if not home_team_id or not away_team_id:
                     results["teams_not_found"] += 1
-                    logger.debug(f"Team not found: {espn_game['away_team']} @ {espn_game['home_team']}")
+                    if not home_team_id:
+                        logger.warning(f"Home team not found: '{espn_game['home_team']}'")
+                    if not away_team_id:
+                        logger.warning(f"Away team not found: '{espn_game['away_team']}'")
+
                     continue
 
                 # Convert tip_time to Eastern date for game date
