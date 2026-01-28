@@ -257,10 +257,13 @@ def create_games_from_espn(days: int = 7) -> dict:
 
     results = {
         "dates_processed": 0,
+        "espn_games_fetched": 0,
         "games_created": 0,
         "games_updated": 0,
         "teams_not_found": 0,
+        "teams_not_found_list": [],
         "errors": 0,
+        "error_details": [],
     }
 
     # Process each day
@@ -275,6 +278,8 @@ def create_games_from_espn(days: int = 7) -> dict:
         if not espn_games:
             continue
 
+        results["espn_games_fetched"] += len(espn_games)
+
         for espn_game in espn_games:
             try:
                 # Look up team IDs using the same function as Odds API
@@ -284,11 +289,13 @@ def create_games_from_espn(days: int = 7) -> dict:
 
                 if not home_team_id or not away_team_id:
                     results["teams_not_found"] += 1
+                    not_found = []
                     if not home_team_id:
-                        logger.warning(f"Home team not found: '{espn_game['home_team']}'")
+                        not_found.append(f"home: {espn_game['home_team']}")
                     if not away_team_id:
-                        logger.warning(f"Away team not found: '{espn_game['away_team']}'")
-
+                        not_found.append(f"away: {espn_game['away_team']}")
+                    results["teams_not_found_list"].append(", ".join(not_found))
+                    logger.warning(f"Team not found: {not_found}")
                     continue
 
                 # Convert tip_time to Eastern date for game date
@@ -333,8 +340,9 @@ def create_games_from_espn(days: int = 7) -> dict:
                     logger.debug(f"Created game: {espn_game['away_team']} @ {espn_game['home_team']}")
 
             except Exception as e:
-                logger.error(f"Error processing ESPN game: {e}")
+                logger.error(f"Error processing ESPN game {espn_game.get('home_team','?')} vs {espn_game.get('away_team','?')}: {e}")
                 results["errors"] += 1
+                results["error_details"].append(f"{espn_game.get('away_team','?')} @ {espn_game.get('home_team','?')}: {str(e)[:100]}")
 
     logger.info(f"ESPN game sync complete: {results}")
     return results
