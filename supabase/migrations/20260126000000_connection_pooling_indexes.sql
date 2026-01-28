@@ -20,13 +20,13 @@
 
 -- Index for today's games filtering (most frequent query)
 -- Covers: WHERE g.date = CURRENT_DATE
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_games_date_covering
+CREATE INDEX IF NOT EXISTS idx_games_date_covering
 ON games(date)
 INCLUDE (id, home_team_id, away_team_id, season, tip_time, is_conference_game, home_score, away_score, status);
 
 -- Composite index for date range queries (upcoming_games view)
 -- Covers: WHERE g.date BETWEEN CURRENT_DATE AND CURRENT_DATE + INTERVAL '7 days'
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_games_date_range
+CREATE INDEX IF NOT EXISTS idx_games_date_range
 ON games(date, tip_time)
 WHERE date >= '2024-01-01';  -- Partial index for recent data only
 
@@ -37,34 +37,34 @@ WHERE date >= '2024-01-01';  -- Partial index for recent data only
 
 -- Spreads LATERAL: ORDER BY captured_at DESC LIMIT 1 for game_id
 -- Already have idx_spreads_game_captured, but add covering index
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_spreads_game_covering
+CREATE INDEX IF NOT EXISTS idx_spreads_game_covering
 ON spreads(game_id, captured_at DESC)
 INCLUDE (home_spread, home_ml, away_ml, over_under, home_spread_odds, away_spread_odds);
 
 -- Rankings LATERAL: WHERE team_id = X AND season = Y ORDER BY week DESC LIMIT 1
 -- Add covering index for the rank column
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_rankings_team_season_covering
+CREATE INDEX IF NOT EXISTS idx_rankings_team_season_covering
 ON rankings(team_id, season, week DESC)
 INCLUDE (rank);
 
 -- Predictions LATERAL: WHERE game_id = X ORDER BY created_at DESC LIMIT 1
 -- Add covering index for all selected columns
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_predictions_game_covering
+CREATE INDEX IF NOT EXISTS idx_predictions_game_covering
 ON predictions(game_id, created_at DESC)
 INCLUDE (predicted_home_cover_prob, confidence_tier, recommended_bet, edge_pct);
 
 -- AI Analysis LATERAL: WHERE game_id = X AND ai_provider = Y ORDER BY created_at DESC LIMIT 1
 -- Separate indexes for claude and grok queries
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ai_analysis_claude
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_claude
 ON ai_analysis(game_id, created_at DESC)
 WHERE ai_provider = 'claude';
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ai_analysis_grok
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_grok
 ON ai_analysis(game_id, created_at DESC)
 WHERE ai_provider = 'grok';
 
 -- Covering index for AI analysis with selected columns
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_ai_analysis_game_provider_covering
+CREATE INDEX IF NOT EXISTS idx_ai_analysis_game_provider_covering
 ON ai_analysis(game_id, ai_provider, created_at DESC)
 INCLUDE (id, recommended_bet, confidence_score);
 
@@ -74,12 +74,12 @@ INCLUDE (id, recommended_bet, confidence_score);
 -- Views use EXISTS subqueries for prediction market flags
 
 -- Prediction markets EXISTS: WHERE pm.game_id = g.id AND pm.status = 'open'
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pm_game_status
+CREATE INDEX IF NOT EXISTS idx_pm_game_status
 ON prediction_markets(game_id, status)
 WHERE status = 'open';
 
 -- Arbitrage opportunities EXISTS: WHERE ao.game_id = X AND ao.is_actionable = true AND ao.captured_at > NOW() - '24 hours'
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_arb_game_actionable_recent
+CREATE INDEX IF NOT EXISTS idx_arb_game_actionable_recent
 ON arbitrage_opportunities(game_id, is_actionable, captured_at DESC)
 WHERE is_actionable = true;
 
@@ -90,27 +90,27 @@ WHERE is_actionable = true;
 
 -- Games without scores (for update_game_results)
 -- Pattern: WHERE date <= X AND home_score IS NULL LIMIT 50
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_games_needs_scoring
+CREATE INDEX IF NOT EXISTS idx_games_needs_scoring
 ON games(date DESC)
 WHERE home_score IS NULL AND status != 'cancelled';
 
 -- Games for predictions (upcoming, unplayed)
 -- Pattern: WHERE date >= X AND home_score IS NULL
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_games_upcoming_unplayed
+CREATE INDEX IF NOT EXISTS idx_games_upcoming_unplayed
 ON games(date, id)
 WHERE home_score IS NULL;
 
 -- Team lookup by normalized name (very frequent during odds processing)
 -- Pattern: WHERE normalized_name = X or ILIKE '%X%'
 -- Already have idx_teams_normalized, but ensure it's optimized
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_teams_normalized_lower
+CREATE INDEX IF NOT EXISTS idx_teams_normalized_lower
 ON teams(LOWER(normalized_name));
 
 -- Games by team matchup and date (odds processing)
 -- Pattern: WHERE home_team_id = X AND away_team_id = Y AND date = Z
 -- Already have idx_games_teams_date, verify it exists
 DROP INDEX IF EXISTS idx_games_teams_date;
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_games_matchup_date
+CREATE INDEX IF NOT EXISTS idx_games_matchup_date
 ON games(home_team_id, away_team_id, date);
 
 -- ============================================
@@ -120,11 +120,11 @@ ON games(home_team_id, away_team_id, date);
 -- index maintenance overhead. These indexes help with UPSERT operations.
 
 -- Spreads source uniqueness check (for deduplication)
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_spreads_game_source_captured
+CREATE INDEX IF NOT EXISTS idx_spreads_game_source_captured
 ON spreads(game_id, source, captured_at DESC);
 
 -- Predictions by model for refresh
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_predictions_game_model
+CREATE INDEX IF NOT EXISTS idx_predictions_game_model
 ON predictions(game_id, model_name);
 
 -- ============================================
