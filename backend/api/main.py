@@ -151,6 +151,12 @@ from .supabase_client import (
     # Performance monitoring
     get_query_stats,
     get_cache_stats,
+    # Batch operations
+    get_or_create_team,
+    upsert_game,
+    get_team_by_name,
+    normalize_team_name,
+    get_supabase,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
 
@@ -2550,6 +2556,263 @@ def debug_ai_analysis(request: Request, game_id: GameIdPath, provider: Literal["
 
     results["overall_status"] = "success" if not results["errors"] else "failed"
     return results
+
+
+# =============================================================================
+# BATCH UPSERT ENDPOINTS
+# =============================================================================
+
+
+class BatchGameItem(BaseModel):
+    """A single game item for batch upsert."""
+    id: Optional[str] = Field(default=None, description="Game UUID (primary key for update)")
+    external_id: Optional[str] = Field(default=None, max_length=255, description="External ID fallback for conflict resolution")
+    home_team: str = Field(min_length=1, max_length=100, description="Home team name")
+    away_team: str = Field(min_length=1, max_length=100, description="Away team name")
+    date: str = Field(description="Game date in ISO format (YYYY-MM-DD)")
+    season: Optional[int] = Field(default=None, ge=1900, le=2100, description="Season year")
+    is_conference_game: Optional[bool] = Field(default=None)
+    venue: Optional[str] = Field(default=None, max_length=255)
+    home_conference: Optional[str] = Field(default=None, max_length=50)
+    away_conference: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator('id')
+    @classmethod
+    def validate_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not UUID_PATTERN.match(v):
+            raise ValueError('id must be a valid UUID')
+        return v
+
+    @field_validator('date')
+    @classmethod
+    def validate_date(cls, v: str) -> str:
+        try:
+            date.fromisoformat(v)
+        except (ValueError, TypeError):
+            raise ValueError('date must be ISO format (YYYY-MM-DD)')
+        return v
+
+
+class BatchGameRequest(BaseModel):
+    """Request model for batch game upsert."""
+    games: list[BatchGameItem] = Field(description="List of games to upsert (max 100)")
+
+    @field_validator('games')
+    @classmethod
+    def validate_length(cls, v: list) -> list:
+        if len(v) > 100:
+            raise ValueError('Maximum 100 games per batch')
+        if len(v) == 0:
+            raise ValueError('At least 1 game required')
+        return v
+
+
+class BatchTeamItem(BaseModel):
+    """A single team item for batch upsert."""
+    id: Optional[str] = Field(default=None, description="Team UUID (primary key for update)")
+    name: str = Field(min_length=1, max_length=100, description="Team name")
+    conference: Optional[str] = Field(default=None, max_length=50)
+    is_power_conference: Optional[bool] = Field(default=None)
+
+    @field_validator('id')
+    @classmethod
+    def validate_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not UUID_PATTERN.match(v):
+            raise ValueError('id must be a valid UUID')
+        return v
+
+
+class BatchTeamRequest(BaseModel):
+    """Request model for batch team upsert."""
+    teams: list[BatchTeamItem] = Field(description="List of teams to upsert (max 200)")
+
+    @field_validator('teams')
+    @classmethod
+    def validate_length(cls, v: list) -> list:
+        if len(v) > 200:
+            raise ValueError('Maximum 200 teams per batch')
+        if len(v) == 0:
+            raise ValueError('At least 1 team required')
+        return v
+
+
+class BatchResultItem(BaseModel):
+    """Result for a single item in a batch operation."""
+    index: int = Field(description="Index in the input array")
+    status: str = Field(description="'created', 'updated', or 'error'")
+    id: Optional[str] = Field(default=None, description="ID of the created/updated record")
+    error: Optional[str] = Field(default=None, description="Error message if failed")
+
+
+class BatchResponse(BaseModel):
+    """Response model for batch operations."""
+    created: int = Field(description="Number of records created")
+    updated: int = Field(description="Number of records updated")
+    errors: list[BatchResultItem] = Field(description="List of failed items with error details")
+    results: list[BatchResultItem] = Field(description="Full list of results per item")
+
+
+@app.post("/api/v1/games/batch", response_model=BatchResponse, tags=["Games"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def batch_upsert_games(request: Request, body: BatchGameRequest):
+    """
+    Batch upsert games with conflict resolution and partial success.
+
+    For each game:
+    - If `id` is provided, looks up by primary key first
+    - Falls back to `external_id` for conflict resolution
+    - Creates new game if no match found
+    - Updates existing game if match found
+
+    Returns per-item results. One bad item does not fail the entire batch.
+
+    Request Body:
+        games: List of game objects (max 100)
+
+    Returns:
+        BatchResponse with created/updated counts and per-item results
+    """
+    created = 0
+    updated = 0
+    errors_list: list[BatchResultItem] = []
+    results: list[BatchResultItem] = []
+
+    client = get_supabase()
+
+    for idx, game_item in enumerate(body.games):
+        try:
+            game_data = game_item.model_dump(exclude_none=True)
+
+            # Check if game exists by PK
+            existing = None
+            if game_data.get("id"):
+                try:
+                    existing = client.table("games").select("id").eq("id", game_data["id"]).execute()
+                    existing = existing.data[0] if existing.data else None
+                except Exception:
+                    existing = None
+
+            # Fallback: check by external_id
+            if not existing and game_data.get("external_id"):
+                try:
+                    existing = client.table("games").select("id").eq("external_id", game_data["external_id"]).execute()
+                    existing = existing.data[0] if existing.data else None
+                except Exception:
+                    existing = None
+
+            # Use upsert_game which handles team resolution and external_id conflict
+            result = upsert_game(game_data)
+            record_id = result.get("id", "")
+
+            if existing:
+                updated += 1
+                results.append(BatchResultItem(index=idx, status="updated", id=record_id))
+            else:
+                created += 1
+                results.append(BatchResultItem(index=idx, status="created", id=record_id))
+
+        except Exception as e:
+            error_msg = str(e)[:200]
+            error_item = BatchResultItem(index=idx, status="error", error=error_msg)
+            errors_list.append(error_item)
+            results.append(error_item)
+
+    return BatchResponse(created=created, updated=updated, errors=errors_list, results=results)
+
+
+@app.post("/api/v1/teams/batch", response_model=BatchResponse, tags=["Games"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def batch_upsert_teams(request: Request, body: BatchTeamRequest):
+    """
+    Batch upsert teams with conflict resolution and partial success.
+
+    For each team:
+    - If `id` is provided, looks up by primary key first
+    - Falls back to exact name match, then normalized name match
+    - Creates new team if no match found
+    - Updates existing team if match found
+
+    Returns per-item results. One bad item does not fail the entire batch.
+
+    Request Body:
+        teams: List of team objects (max 200)
+
+    Returns:
+        BatchResponse with created/updated counts and per-item results
+    """
+    created = 0
+    updated = 0
+    errors_list: list[BatchResultItem] = []
+    results: list[BatchResultItem] = []
+
+    client = get_supabase()
+    power_conferences = {"ACC", "Big Ten", "Big 12", "SEC", "Big East", "Pac-12"}
+
+    for idx, team_item in enumerate(body.teams):
+        try:
+            # Check if team exists by PK
+            existing = None
+            if team_item.id:
+                try:
+                    existing = client.table("teams").select("id").eq("id", team_item.id).execute()
+                    existing = existing.data[0] if existing.data else None
+                except Exception:
+                    existing = None
+
+            # Fallback: exact name match
+            if not existing:
+                try:
+                    exact = client.table("teams").select("id").eq("name", team_item.name).execute()
+                    existing = exact.data[0] if exact.data else None
+                except Exception:
+                    existing = None
+
+            # Fallback: normalized name match
+            if not existing:
+                normalized = normalize_team_name(team_item.name)
+                team_by_norm = get_team_by_name(normalized)
+                if team_by_norm:
+                    existing = team_by_norm
+
+            if existing:
+                # Update existing team
+                update_data = {}
+                if team_item.conference is not None:
+                    update_data["conference"] = team_item.conference
+                if team_item.is_power_conference is not None:
+                    update_data["is_power_conference"] = team_item.is_power_conference
+                elif team_item.conference is not None:
+                    update_data["is_power_conference"] = team_item.conference in power_conferences
+
+                if update_data:
+                    client.table("teams").update(update_data).eq("id", existing["id"]).execute()
+
+                updated += 1
+                results.append(BatchResultItem(index=idx, status="updated", id=existing["id"]))
+            else:
+                # Create new team
+                is_power = team_item.is_power_conference
+                if is_power is None and team_item.conference:
+                    is_power = team_item.conference in power_conferences
+
+                new_team = client.table("teams").insert({
+                    "name": team_item.name,
+                    "normalized_name": normalize_team_name(team_item.name),
+                    "conference": team_item.conference,
+                    "is_power_conference": is_power or False,
+                }).execute()
+
+                record_id = new_team.data[0]["id"] if new_team.data else ""
+                created += 1
+                results.append(BatchResultItem(index=idx, status="created", id=record_id))
+
+        except Exception as e:
+            error_msg = str(e)[:200]
+            error_item = BatchResultItem(index=idx, status="error", error=error_msg)
+            errors_list.append(error_item)
+            results.append(error_item)
+
+    return BatchResponse(created=created, updated=updated, errors=errors_list, results=results)
 
 
 if __name__ == "__main__":
