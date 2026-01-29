@@ -376,6 +376,34 @@ export interface ArbitrageOpportunity {
   away_team?: string;
 }
 
+// Odds Movement Types
+export interface OddsMovement {
+  game_id: string;
+  home_team: string;
+  away_team: string;
+  previous_spread: number | null;
+  current_spread: number | null;
+  spread_movement: number | null;
+  previous_home_ml: number | null;
+  current_home_ml: number | null;
+  previous_away_ml: number | null;
+  current_away_ml: number | null;
+  home_prob_movement: number | null;
+  is_significant: boolean;
+  detected_at: string;
+}
+
+export interface LiveAnalysis {
+  status: string;
+  game_id: string;
+  movement?: OddsMovement;
+  explanation?: string;
+  updated_recommendation?: string;
+  confidence?: number;
+  action?: 'new_value' | 'hold' | 'fade' | 'pass';
+  message?: string;
+}
+
 // Utility types
 export type SortDirection = 'asc' | 'desc';
 

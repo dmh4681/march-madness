@@ -2559,6 +2559,97 @@ def debug_ai_analysis(request: Request, game_id: GameIdPath, provider: Literal["
 
 
 # =============================================================================
+# ODDS MOVEMENT & LIVE ANALYSIS ENDPOINTS
+# =============================================================================
+
+
+@app.get("/api/v1/odds/movements", tags=["Odds Movement"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_odds_movements(request: Request):
+    """
+    Get all detected odds movements from the last refresh.
+
+    Returns movements for all active games, indicating which have
+    significant line changes (2pt spread or 10% probability threshold).
+
+    Returns:
+        dict: List of movements with significance flags
+    """
+    from backend.services.odds_monitor import odds_monitor
+
+    result = odds_monitor.check_all_active_games()
+    return result
+
+
+@app.get("/api/v1/odds/movements/{game_id}", tags=["Odds Movement"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_game_movement(request: Request, game_id: GameIdPath):
+    """
+    Get odds movement data for a specific game.
+
+    Returns:
+        dict: Movement data or 404 if no movement detected
+    """
+    from backend.services.odds_monitor import odds_monitor
+
+    movement = odds_monitor.get_game_movement(game_id)
+    if not movement:
+        raise NotFoundException(resource="Movement", identifier=game_id)
+    return movement
+
+
+@app.post("/api/v1/odds/refresh", tags=["Odds Movement"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def refresh_odds_movements(request: Request):
+    """
+    Manually refresh odds and detect movements.
+
+    Fetches current odds from The Odds API, compares against stored
+    spreads, and returns all detected movements.
+
+    Returns:
+        dict: Refresh results with movements and significant movements
+    """
+    from backend.services.odds_monitor import odds_monitor
+
+    return odds_monitor.check_all_active_games()
+
+
+@app.get("/api/v1/analysis/live/{game_id}", tags=["Odds Movement", "AI Analysis"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def get_live_analysis(request: Request, game_id: GameIdPath):
+    """
+    Get AI-powered analysis of odds movement for a specific game.
+
+    If a significant movement was detected for this game, generates
+    a Claude-powered explanation and updated recommendation.
+
+    Returns:
+        dict: Movement analysis with explanation, updated rec, and action
+    """
+    from backend.services.odds_monitor import odds_monitor
+    from backend.services.live_analysis import generate_movement_analysis
+
+    movement = odds_monitor.get_game_movement(game_id)
+    if not movement:
+        return {
+            "status": "no_movement",
+            "game_id": game_id,
+            "message": "No movement detected. Run POST /api/v1/odds/refresh first.",
+        }
+
+    if not movement.get("is_significant"):
+        return {
+            "status": "not_significant",
+            "game_id": game_id,
+            "movement": movement,
+            "message": "Movement detected but below significance threshold.",
+        }
+
+    return generate_movement_analysis(game_id, movement)
+
+
+# =============================================================================
 # BATCH UPSERT ENDPOINTS
 # =============================================================================
 

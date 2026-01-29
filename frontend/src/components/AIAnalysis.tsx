@@ -93,7 +93,7 @@
  */
 
 import { useState } from 'react';
-import type { AIAnalysis, AIProvider } from '@/lib/types';
+import type { AIAnalysis, AIProvider, OddsMovement, LiveAnalysis } from '@/lib/types';
 import { AIAnalysisSkeleton, AICompareViewSkeleton } from './ui/skeleton';
 import { InfoTooltip } from './Tooltip';
 
@@ -103,12 +103,20 @@ interface AIAnalysisProps {
   analyses: AIAnalysis[];
   onRequestAnalysis?: (provider: AIProvider) => Promise<void>;
   isLoading?: boolean;
+  liveAnalysis?: LiveAnalysis | null;
+  movement?: OddsMovement | null;
+  onRefreshOdds?: () => Promise<void>;
+  isRefreshingOdds?: boolean;
 }
 
 export function AIAnalysisPanel({
   analyses,
   onRequestAnalysis,
   isLoading = false,
+  liveAnalysis,
+  movement,
+  onRefreshOdds,
+  isRefreshingOdds = false,
 }: AIAnalysisProps) {
   const [activeView, setActiveView] = useState<ViewMode>('claude');
 
@@ -180,6 +188,78 @@ export function AIAnalysisPanel({
           </button>
         )}
       </div>
+
+      {/* Live Update Badge & Movement Details */}
+      {movement && movement.is_significant && (
+        <div className="px-4 sm:px-6 pt-4">
+          <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-yellow-500/20 text-yellow-400 border border-yellow-500/40">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
+                LIVE UPDATE
+              </span>
+              <span className="text-xs text-gray-400">
+                Line moved {movement.spread_movement !== null
+                  ? `${movement.spread_movement > 0 ? '+' : ''}${movement.spread_movement.toFixed(1)} pts`
+                  : movement.home_prob_movement !== null
+                  ? `${(movement.home_prob_movement * 100) > 0 ? '+' : ''}${(movement.home_prob_movement * 100).toFixed(1)}% implied`
+                  : ''}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-gray-400">Previous:</span>
+                <span className="text-white ml-1">{movement.previous_spread ?? 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-gray-400">Current:</span>
+                <span className="text-white ml-1">{movement.current_spread ?? 'N/A'}</span>
+              </div>
+            </div>
+            {liveAnalysis && liveAnalysis.status === 'success' && (
+              <div className="mt-2 pt-2 border-t border-yellow-500/20">
+                <p className="text-sm text-gray-300">{liveAnalysis.explanation}</p>
+                {liveAnalysis.updated_recommendation && liveAnalysis.updated_recommendation !== 'pass' && (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="text-xs text-gray-400">Updated rec:</span>
+                    <span className="text-sm font-medium text-yellow-400">
+                      {formatBetRecommendation(liveAnalysis.updated_recommendation)}
+                    </span>
+                    {liveAnalysis.confidence !== undefined && (
+                      <span className="text-xs text-gray-400">
+                        ({(liveAnalysis.confidence * 100).toFixed(0)}%)
+                      </span>
+                    )}
+                    {liveAnalysis.action && (
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                        liveAnalysis.action === 'new_value' ? 'bg-green-500/20 text-green-400' :
+                        liveAnalysis.action === 'fade' ? 'bg-red-500/20 text-red-400' :
+                        liveAnalysis.action === 'hold' ? 'bg-blue-500/20 text-blue-400' :
+                        'bg-gray-500/20 text-gray-400'
+                      }`}>
+                        {liveAnalysis.action.replace('_', ' ')}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Refresh Odds Button */}
+      {onRefreshOdds && (
+        <div className="px-4 sm:px-6 pt-3">
+          <button
+            onClick={onRefreshOdds}
+            disabled={isRefreshingOdds}
+            className="text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 active:bg-gray-600 text-gray-300 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRefreshingOdds ? 'Refreshing...' : 'Refresh Odds'}
+          </button>
+        </div>
+      )}
 
       {/* Content - responsive padding */}
       <div className="p-4 sm:p-6">
