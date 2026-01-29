@@ -8,6 +8,7 @@ AI analysis logic -- only adds movement-specific re-analysis.
 """
 
 import logging
+import re
 from typing import Optional
 
 from backend.api.ai_service import (
@@ -18,6 +19,13 @@ from backend.api.ai_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+MAX_RESPONSE_LENGTH = 2000
+
+
+def sanitize_team_name(name: str) -> str:
+    """Strip characters that could be used for prompt injection."""
+    return re.sub(r'[^\w\s\-\.]', '', name)[:100]
 
 
 def generate_movement_analysis(game_id: str, movement: dict) -> dict:
@@ -43,7 +51,8 @@ def generate_movement_analysis(game_id: str, movement: dict) -> dict:
 
     try:
         context = build_game_context(game_id)
-    except ValueError as e:
+    except Exception as e:
+        logger.error(f"Failed to build game context for {game_id}: {e}")
         return {
             "status": "error",
             "message": _sanitize_error_message(str(e)),
@@ -55,7 +64,7 @@ def generate_movement_analysis(game_id: str, movement: dict) -> dict:
     prompt = f"""You are an expert college basketball betting analyst. A significant odds movement has been detected for the following game. Analyze the movement and provide updated recommendations.
 
 ## GAME
-**{movement.get('away_team', 'Away')}** @ **{movement.get('home_team', 'Home')}**
+**{sanitize_team_name(movement.get('away_team', 'Away'))}** @ **{sanitize_team_name(movement.get('home_team', 'Home'))}**
 
 ## ODDS MOVEMENT
 - Previous spread: {movement.get('previous_spread', 'N/A')}
@@ -95,6 +104,9 @@ Respond with ONLY the JSON object."""
         )
 
         response_text = response.content[0].text
+        if len(response_text) > MAX_RESPONSE_LENGTH:
+            logger.warning(f"Claude response for game {game_id} exceeded {MAX_RESPONSE_LENGTH} chars, truncating")
+            response_text = response_text[:MAX_RESPONSE_LENGTH]
         analysis = _extract_json_from_response(response_text)
 
         return {
