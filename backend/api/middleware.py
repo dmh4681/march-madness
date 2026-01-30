@@ -339,7 +339,7 @@ def get_client_ip(request: Request) -> str:
 limiter = Limiter(key_func=get_client_ip)
 
 # Rate limit constants
-RATE_LIMIT_AI_ENDPOINTS = "5/minute"      # Expensive AI analysis endpoints
+RATE_LIMIT_AI_ENDPOINTS = "10/minute"     # AI analysis endpoints (rate limited to prevent abuse)
 RATE_LIMIT_STANDARD_ENDPOINTS = "30/minute"  # Standard API endpoints
 
 

@@ -71,11 +71,35 @@ def get_eastern_date_today() -> date:
     return datetime.now(EASTERN_TZ).date()
 
 from dotenv import load_dotenv
+from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import FastAPI, HTTPException, Request, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+# =============================================================================
+# SECURITY: Request Body Size Limit Middleware
+# =============================================================================
+MAX_REQUEST_BODY_SIZE = 10 * 1024  # 10KB
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    """Reject POST/PUT/PATCH requests with bodies exceeding MAX_REQUEST_BODY_SIZE."""
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method in ("POST", "PUT", "PATCH"):
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > MAX_REQUEST_BODY_SIZE:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "REQUEST_TOO_LARGE",
+                        "message": f"Request body exceeds maximum size of {MAX_REQUEST_BODY_SIZE} bytes",
+                    },
+                )
+        return await call_next(request)
 
 load_dotenv()
 
@@ -426,6 +450,9 @@ app.add_middleware(
 # Add request logging middleware
 app.add_middleware(RequestLoggingMiddleware)
 
+# Add request body size limit (10KB for POST endpoints)
+app.add_middleware(RequestSizeLimitMiddleware)
+
 # Register exception handlers
 app.add_exception_handler(ApiException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
@@ -553,6 +580,14 @@ class PredictRequest(BaseModel):
         """Validate game_id is a properly formatted UUID."""
         if v is not None and not UUID_PATTERN.match(v):
             raise ValueError('game_id must be a valid UUID')
+        return v
+
+    @field_validator('home_team', 'away_team')
+    @classmethod
+    def validate_team_name(cls, v: Optional[str]) -> Optional[str]:
+        """Validate team name contains only allowed characters (alphanumeric, spaces, hyphens, periods, apostrophes, ampersands)."""
+        if v is not None and not re.match(r"^[a-zA-Z0-9\s\-\.\'\&\(\)]+$", v):
+            raise ValueError('Team name must contain only alphanumeric characters, spaces, hyphens, periods, apostrophes, or ampersands')
         return v
 
     @model_validator(mode='after')
