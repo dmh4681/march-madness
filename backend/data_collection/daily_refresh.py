@@ -306,6 +306,7 @@ ODDS_API_TEAM_MAP = {
     "Washington State Cougars": "washington-state",
     "Texas Tech Red Raiders": "texas-tech",
     "Texas A&M Aggies": "texas-am",
+    "Texas A&amp;M Aggies": "texas-am",
     "Oklahoma Sooners": "oklahoma",
     "Oklahoma State Cowboys": "oklahoma-state",
     "West Virginia Mountaineers": "west-virginia",
@@ -348,6 +349,8 @@ ODDS_API_TEAM_MAP = {
     "Wichita State Shockers": "wichita-state",
     "Tulane Green Wave": "tulane",
     "South Florida Bulls": "south-florida",
+    "Arizona State Sun Devils": "arizona-state",
+    "Georgia Tech Yellow Jackets": "georgia-tech",
 }
 
 
@@ -386,6 +389,7 @@ def normalize_team_name(name: str) -> str:
         "broncos", "dons", "miners", "roadrunners", "blazers",
         "golden hurricane", "mean green", "purple aces", "blue hens",
         "scarlet knights", "fighting illini", "aztecs", "wolf pack",
+        "sun devils", "yellow jackets", "red raiders",
     ]
 
     for suffix in suffixes:
