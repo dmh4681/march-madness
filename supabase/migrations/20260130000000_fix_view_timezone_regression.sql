@@ -1,14 +1,18 @@
--- Fix tip_time in views to use actual tip_time column instead of date
--- This allows ESPN-scraped tip times to be displayed
+-- =============================================================================
+-- Fix Timezone Regression in Views
+-- Created: 2026-01-30
+-- Purpose: The tip_time fix migration (20260123) regressed the timezone fix
+--          from 20250122 by using CURRENT_DATE (UTC) instead of Eastern time.
+--          This migration restores Eastern time filtering.
+-- =============================================================================
 
--- Drop and recreate today_games view
 DROP VIEW IF EXISTS today_games CASCADE;
 
 CREATE OR REPLACE VIEW today_games AS
 SELECT
     g.id,
     g.date,
-    g.tip_time,  -- Use actual tip_time, not g.date
+    g.tip_time,
     g.season,
     g.is_conference_game,
     g.home_score,
@@ -54,7 +58,7 @@ SELECT
     END as confidence_tier,
     COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
 
-    -- EDGE CALCULATION: (AI_Confidence - Market_Implied_Probability) × 100
+    -- EDGE CALCULATION: (AI_Confidence - Market_Implied_Probability) x 100
     COALESCE(
         CASE WHEN claude.id IS NOT NULL THEN
             (claude.confidence_score -
@@ -155,6 +159,7 @@ LEFT JOIN LATERAL (
     ORDER BY created_at DESC
     LIMIT 1
 ) grok ON true
+-- FIX: Use Eastern time for "today" since games are stored in Eastern time
 WHERE g.date = (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::DATE
 ORDER BY g.tip_time, g.date, ht.name;
 
@@ -166,7 +171,7 @@ CREATE OR REPLACE VIEW upcoming_games AS
 SELECT
     g.id,
     g.date,
-    g.tip_time,  -- Use actual tip_time, not g.date
+    g.tip_time,
     g.season,
     g.is_conference_game,
     g.home_score,
@@ -189,7 +194,6 @@ SELECT
     hr.rank as home_rank,
     ar.rank as away_rank,
 
-    -- Use AI analysis if available (Claude preferred over Grok), otherwise baseline prediction
     COALESCE(claude.confidence_score, grok.confidence_score, p.predicted_home_cover_prob) as predicted_home_cover_prob,
     CASE
         WHEN claude.id IS NOT NULL THEN
@@ -208,7 +212,6 @@ SELECT
     END as confidence_tier,
     COALESCE(claude.recommended_bet, grok.recommended_bet, p.recommended_bet) as recommended_bet,
 
-    -- EDGE CALCULATION
     COALESCE(
         CASE WHEN claude.id IS NOT NULL THEN
             (claude.confidence_score -
@@ -247,12 +250,10 @@ SELECT
         p.edge_pct
     ) as edge_pct,
 
-    -- AI analysis flags
     (claude.id IS NOT NULL OR grok.id IS NOT NULL) as has_ai_analysis,
     (claude.id IS NOT NULL) as has_claude_analysis,
     (grok.id IS NOT NULL) as has_grok_analysis,
 
-    -- Prediction market flags
     (EXISTS (
         SELECT 1 FROM prediction_markets pm
         WHERE pm.game_id = g.id AND pm.status = 'open'
@@ -309,6 +310,7 @@ LEFT JOIN LATERAL (
     ORDER BY created_at DESC
     LIMIT 1
 ) grok ON true
+-- FIX: Use Eastern time for date range
 WHERE g.date BETWEEN (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::DATE
                  AND (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::DATE + INTERVAL '7 days'
 ORDER BY g.date, g.tip_time, ht.name;
@@ -320,5 +322,5 @@ GRANT SELECT ON today_games TO anon;
 GRANT SELECT ON upcoming_games TO authenticated;
 GRANT SELECT ON upcoming_games TO anon;
 
-COMMENT ON VIEW today_games IS 'Today games with AI analysis, predictions, prediction market flags, and real tip times';
-COMMENT ON VIEW upcoming_games IS 'Upcoming games (7 days) with AI analysis, predictions, prediction market flags, and real tip times';
+COMMENT ON VIEW today_games IS 'Today games with Eastern timezone fix, AI analysis, predictions, prediction market flags, and real tip times';
+COMMENT ON VIEW upcoming_games IS 'Upcoming games (7 days) with Eastern timezone fix, AI analysis, predictions, prediction market flags, and real tip times';

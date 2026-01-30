@@ -222,6 +222,19 @@ except ImportError:
     # Fallback for direct module execution
     from ..utils.cache import invalidate_ratings_caches, ratings_cache
 
+def get_current_season() -> int:
+    """Get the current college basketball season year.
+
+    College basketball seasons span two calendar years (e.g., 2025-26 season).
+    The season is identified by the year it ends in. If we're between
+    August and December, the season ends next year. Jan-July = current year.
+    """
+    today = get_eastern_date_today()
+    if today.month >= 8:  # Aug-Dec: season ends next year
+        return today.year + 1
+    return today.year
+
+
 def _get_supabase():
     """Get the secure Supabase client with proper error handling."""
     try:
@@ -263,7 +276,78 @@ ODDS_API_TEAM_MAP = {
     "Creighton Bluejays": "creighton",
     "Iowa State Cyclones": "iowa-state",
     "Auburn Tigers": "auburn",
-    # Add more as needed
+    "St. John's Red Storm": "st-johns",
+    "St. John's (NY) Red Storm": "st-johns",
+    "TCU Horned Frogs": "tcu",
+    "Cincinnati Bearcats": "cincinnati",
+    "California Golden Bears": "california",
+    "Oregon Ducks": "oregon",
+    "Florida Gators": "florida",
+    "Georgia Bulldogs": "georgia",
+    "South Carolina Gamecocks": "south-carolina",
+    "Florida State Seminoles": "florida-state",
+    "LSU Tigers": "lsu",
+    "Mississippi State Bulldogs": "mississippi-state",
+    "Wisconsin Badgers": "wisconsin",
+    "Minnesota Golden Gophers": "minnesota",
+    "Iowa Hawkeyes": "iowa",
+    "USC Trojans": "usc",
+    "Georgetown Hoyas": "georgetown",
+    "DePaul Blue Demons": "depaul",
+    "Villanova Wildcats": "villanova",
+    "Seton Hall Pirates": "seton-hall",
+    "Xavier Musketeers": "xavier",
+    "Providence Friars": "providence",
+    "Butler Bulldogs": "butler",
+    "Army Black Knights": "army",
+    "Navy Midshipmen": "navy",
+    "Oregon State Beavers": "oregon-state",
+    "Washington Huskies": "washington",
+    "Washington State Cougars": "washington-state",
+    "Texas Tech Red Raiders": "texas-tech",
+    "Texas A&M Aggies": "texas-am",
+    "Oklahoma Sooners": "oklahoma",
+    "Oklahoma State Cowboys": "oklahoma-state",
+    "West Virginia Mountaineers": "west-virginia",
+    "Kansas State Wildcats": "kansas-state",
+    "Colorado Buffaloes": "colorado",
+    "BYU Cougars": "byu",
+    "UCF Knights": "ucf",
+    "Arkansas Razorbacks": "arkansas",
+    "Ole Miss Rebels": "ole-miss",
+    "Mississippi Rebels": "ole-miss",
+    "Vanderbilt Commodores": "vanderbilt",
+    "Missouri Tigers": "missouri",
+    "Virginia Cavaliers": "virginia",
+    "Virginia Tech Hokies": "virginia-tech",
+    "North Carolina State Wolfpack": "nc-state",
+    "NC State Wolfpack": "nc-state",
+    "Syracuse Orange": "syracuse",
+    "Pittsburgh Panthers": "pittsburgh",
+    "Clemson Tigers": "clemson",
+    "Louisville Cardinals": "louisville",
+    "Wake Forest Demon Deacons": "wake-forest",
+    "Miami Hurricanes": "miami",
+    "Miami (FL) Hurricanes": "miami",
+    "Boston College Eagles": "boston-college",
+    "Notre Dame Fighting Irish": "notre-dame",
+    "Indiana Hoosiers": "indiana",
+    "Illinois Fighting Illini": "illinois",
+    "Ohio State Buckeyes": "ohio-state",
+    "Michigan Wolverines": "michigan",
+    "Penn State Nittany Lions": "penn-state",
+    "Northwestern Wildcats": "northwestern",
+    "Rutgers Scarlet Knights": "rutgers",
+    "Nebraska Cornhuskers": "nebraska",
+    "Maryland Terrapins": "maryland",
+    "San Diego State Aztecs": "san-diego-state",
+    "Nevada Wolf Pack": "nevada",
+    "Boise State Broncos": "boise-state",
+    "SMU Mustangs": "smu",
+    "Memphis Tigers": "memphis",
+    "Wichita State Shockers": "wichita-state",
+    "Tulane Green Wave": "tulane",
+    "South Florida Bulls": "south-florida",
 }
 
 
@@ -289,6 +373,19 @@ def normalize_team_name(name: str) -> str:
         "hoosiers", "boilermakers", "buckeyes", "nittany lions",
         "golden gophers", "badgers", "hawkeyes", "cornhuskers",
         "razorbacks", "gamecocks", "commodores", "rebels", "aggies",
+        "red storm", "horned frogs", "bearcats", "golden bears",
+        "black knights", "midshipmen", "demon deacons", "hokies",
+        "cavaliers", "wolfpack", "orange", "hurricanes", "trojans",
+        "bruins", "beavers", "buffaloes", "musketeers", "friars",
+        "pirates", "hoyas", "blue demons", "red raiders", "sooners",
+        "cowboys", "mustangs", "shockers", "green wave", "bulls",
+        "rams", "explorers", "patriots", "dukes", "bonnies",
+        "colonels", "governors", "leopards", "bison", "raiders",
+        "crusaders", "salukis", "beacons", "bruins", "pilots",
+        "toreros", "waves", "mastodons", "golden grizzlies", "royals",
+        "broncos", "dons", "miners", "roadrunners", "blazers",
+        "golden hurricane", "mean green", "purple aces", "blue hens",
+        "scarlet knights", "fighting illini", "aztecs", "wolf pack",
     ]
 
     for suffix in suffixes:
@@ -412,10 +509,10 @@ def process_odds_data(odds_data: list[dict]) -> dict:
                     new_game = {
                         "external_id": game.get("id", f"{home_team_id}-{away_team_id}-{game_date}"),
                         "date": game_date,
-                        "season": 2025,  # Current season
+                        "season": get_current_season(),
                         "home_team_id": home_team_id,
                         "away_team_id": away_team_id,
-                        "is_conference_game": False,  # Would need to determine this
+                        "is_conference_game": False,
                         "status": "scheduled",
                     }
                     insert_result = client.table("games").insert(new_game).execute()
@@ -718,7 +815,7 @@ def refresh_kenpom_data() -> dict:
             return {"status": "skipped", "reason": "no_credentials"}
 
         # Run the KenPom refresh
-        results = kenpom_refresh(season=2025)
+        results = kenpom_refresh(season=get_current_season())
         return results
 
     except ImportError as e:
@@ -737,7 +834,7 @@ def refresh_haslametrics_data() -> dict:
         from .haslametrics_scraper import refresh_haslametrics_data as hasla_refresh
 
         # Run the Haslametrics refresh (no credentials needed - FREE!)
-        results = hasla_refresh(season=2025)
+        results = hasla_refresh(season=get_current_season())
         return results
 
     except ImportError as e:

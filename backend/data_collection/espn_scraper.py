@@ -250,7 +250,7 @@ def create_games_from_espn(days: int = 7) -> dict:
         dict with counts of games created, updated, etc.
     """
     from backend.api.supabase_client import get_supabase
-    from backend.data_collection.daily_refresh import get_team_id
+    from backend.data_collection.daily_refresh import get_team_id, get_current_season
 
     client = get_supabase()
     today = datetime.now(EASTERN_TZ).date()
@@ -334,7 +334,7 @@ def create_games_from_espn(days: int = 7) -> dict:
                         "external_id": espn_external_id,
                         "date": game_date,
                         "tip_time": tip_time_utc.isoformat(),
-                        "season": 2025,
+                        "season": get_current_season(),
                         "home_team_id": home_team_id,
                         "away_team_id": away_team_id,
                         "is_conference_game": False,
