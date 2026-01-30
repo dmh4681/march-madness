@@ -609,35 +609,6 @@ def process_odds_data(odds_data: list[dict]) -> dict:
     }
 
 
-def fetch_cbbpy_games() -> list[dict]:
-    """Fetch recent and upcoming games from CBBpy."""
-    print("\n=== Fetching Games from CBBpy ===")
-
-    try:
-        from cbbpy.mens_scraper import get_games_range
-
-        # Get games from past week and next week (use Eastern time for consistency)
-        today = get_eastern_date_today()
-        start_date = (today - timedelta(days=7)).strftime("%Y-%m-%d")
-        end_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
-
-        games_df = get_games_range(start_date, end_date)
-
-        if games_df is None or len(games_df) == 0:
-            print("No games found from CBBpy")
-            return []
-
-        print(f"Fetched {len(games_df)} games from CBBpy")
-        return games_df.to_dict('records')
-
-    except ImportError:
-        print("CBBpy not available, skipping game fetch")
-        return []
-    except Exception as e:
-        print(f"Error fetching games from CBBpy: {e}")
-        return []
-
-
 def run_predictions(force_regenerate: bool = False) -> dict:
     """Run predictions on upcoming games.
 
