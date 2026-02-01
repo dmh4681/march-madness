@@ -99,10 +99,34 @@ import { InfoTooltip } from './Tooltip';
 
 type ViewMode = AIProvider | 'compare';
 
+type AnalysisErrorType = 'network' | 'timeout' | 'server' | 'unknown';
+
+interface AnalysisError {
+  type: AnalysisErrorType;
+  message: string;
+}
+
+function classifyError(error: unknown): AnalysisError {
+  if (error instanceof Error) {
+    if (error.name === 'AbortError' || error.message.toLowerCase().includes('timeout')) {
+      return { type: 'timeout', message: 'Analysis took too long, try again' };
+    }
+    if (error instanceof TypeError && error.message.includes('fetch')) {
+      return { type: 'network', message: 'Check your connection' };
+    }
+    if (error.message.includes('5') && error.message.includes('00')) {
+      return { type: 'server', message: 'Our AI is temporarily unavailable' };
+    }
+  }
+  return { type: 'unknown', message: 'Something went wrong. Please try again.' };
+}
+
 interface AIAnalysisProps {
   analyses: AIAnalysis[];
   onRequestAnalysis?: (provider: AIProvider) => Promise<void>;
   isLoading?: boolean;
+  error?: unknown;
+  onRetry?: () => void;
   liveAnalysis?: LiveAnalysis | null;
   movement?: OddsMovement | null;
   onRefreshOdds?: () => Promise<void>;
@@ -113,6 +137,8 @@ export function AIAnalysisPanel({
   analyses,
   onRequestAnalysis,
   isLoading = false,
+  error,
+  onRetry,
   liveAnalysis,
   movement,
   onRefreshOdds,
@@ -263,7 +289,9 @@ export function AIAnalysisPanel({
 
       {/* Content - responsive padding */}
       <div className="p-4 sm:p-6">
-        {isLoading ? (
+        {error ? (
+          <AnalysisErrorDisplay error={error} onRetry={onRetry} />
+        ) : isLoading ? (
           activeView === 'compare' ? (
             <AICompareViewSkeleton />
           ) : (
@@ -459,6 +487,38 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
           </ul>
         </details>
       </div>
+    </div>
+  );
+}
+
+function AnalysisErrorDisplay({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+  const classified = classifyError(error);
+
+  const iconByType: Record<AnalysisErrorType, string> = {
+    network: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
+    timeout: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z',
+    server: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+    unknown: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+  };
+
+  return (
+    <div className="text-center py-6 sm:py-8">
+      <svg className="h-10 w-10 text-red-400 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={iconByType[classified.type]} />
+      </svg>
+      <p className="text-red-400 font-medium mb-1">Analysis Failed</p>
+      <p className="text-gray-400 text-sm mb-4">{classified.message}</p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="px-4 py-2.5 min-h-[44px] bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors inline-flex items-center gap-2"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Retry Analysis
+        </button>
+      )}
     </div>
   );
 }

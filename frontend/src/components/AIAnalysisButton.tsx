@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { AIProvider } from '@/lib/types';
 
 // Error types for user-friendly messages
@@ -198,6 +198,24 @@ export function AIAnalysisButton({
     runAnalysis(selectedProvider, true);
   };
 
+  const progressPhases = [
+    'Fetching game data...',
+    'Running AI analysis...',
+    'Generating picks...',
+  ];
+  const [progressIndex, setProgressIndex] = useState(0);
+
+  useEffect(() => {
+    if (!loading) {
+      setProgressIndex(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setProgressIndex(prev => (prev + 1) % progressPhases.length);
+    }, 3500);
+    return () => clearInterval(interval);
+  }, [loading, progressPhases.length]);
+
   const providerLabel = selectedProvider === 'claude' ? 'Claude' : 'Grok';
   const hasCurrentProviderAnalysis = selectedProvider === 'claude' ? hasClaudeAnalysis : hasGrokAnalysis;
 
@@ -293,8 +311,8 @@ export function AIAnalysisButton({
 
       {/* Loading progress hint */}
       {loading && (
-        <p className="text-xs text-gray-500 text-center">
-          AI analysis typically completes within 30-60 seconds
+        <p className="text-xs text-gray-500 text-center animate-pulse">
+          {progressPhases[progressIndex]}
         </p>
       )}
 
