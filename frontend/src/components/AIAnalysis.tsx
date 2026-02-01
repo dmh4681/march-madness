@@ -114,7 +114,7 @@ function classifyError(error: unknown): AnalysisError {
     if (error instanceof TypeError && error.message.includes('fetch')) {
       return { type: 'network', message: 'Check your connection' };
     }
-    if (error.message.includes('5') && error.message.includes('00')) {
+    if (/\b5\d{2}\b/.test(error.message)) {
       return { type: 'server', message: 'Our AI is temporarily unavailable' };
     }
   }

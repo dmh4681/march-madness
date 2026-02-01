@@ -12,6 +12,12 @@ interface ErrorState {
   canRetry: boolean;
 }
 
+const PROGRESS_PHASES = [
+  'Fetching game data...',
+  'Running AI analysis...',
+  'Generating picks...',
+];
+
 // Parse error response and categorize it
 function parseError(err: unknown, response?: Response, responseText?: string): ErrorState {
   // Handle abort/timeout errors
@@ -198,11 +204,6 @@ export function AIAnalysisButton({
     runAnalysis(selectedProvider, true);
   };
 
-  const progressPhases = [
-    'Fetching game data...',
-    'Running AI analysis...',
-    'Generating picks...',
-  ];
   const [progressIndex, setProgressIndex] = useState(0);
 
   useEffect(() => {
@@ -211,10 +212,10 @@ export function AIAnalysisButton({
       return;
     }
     const interval = setInterval(() => {
-      setProgressIndex(prev => (prev + 1) % progressPhases.length);
+      setProgressIndex(prev => (prev + 1) % PROGRESS_PHASES.length);
     }, 3500);
     return () => clearInterval(interval);
-  }, [loading, progressPhases.length]);
+  }, [loading]);
 
   const providerLabel = selectedProvider === 'claude' ? 'Claude' : 'Grok';
   const hasCurrentProviderAnalysis = selectedProvider === 'claude' ? hasClaudeAnalysis : hasGrokAnalysis;
@@ -312,7 +313,7 @@ export function AIAnalysisButton({
       {/* Loading progress hint */}
       {loading && (
         <p className="text-xs text-gray-500 text-center animate-pulse">
-          {progressPhases[progressIndex]}
+          {PROGRESS_PHASES[progressIndex]}
         </p>
       )}
 
