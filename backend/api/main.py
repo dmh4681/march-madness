@@ -2180,7 +2180,7 @@ def get_prediction_markets():
         return {"error": str(e)}
 
 
-@app.get("/debug-pm-match")
+@app.get("/debug-pm-match", tags=["Debug"])
 def debug_pm_match():
     """
     Debug: Check if prediction markets match upcoming games.
@@ -2228,7 +2228,7 @@ def debug_pm_match():
         return {"error": str(e)}
 
 
-@app.get("/test-kalshi")
+@app.get("/test-kalshi", tags=["Debug"])
 def test_kalshi_endpoint():
     """
     Diagnostic endpoint to test Kalshi API connection.

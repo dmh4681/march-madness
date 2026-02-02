@@ -594,7 +594,39 @@ Respond with ONLY the JSON object, no additional text."""
 
 
 def analyze_with_claude(context: dict) -> dict:
-    """Run analysis using Claude."""
+    """
+    Run game analysis using Anthropic's Claude API.
+
+    Calls Claude Sonnet 4 via the Anthropic SDK with a structured betting
+    analysis prompt. The prompt includes all available game context (rankings,
+    spreads, KenPom, Haslametrics, prediction markets).
+
+    API Call Details:
+        - Model: claude-sonnet-4-20250514
+        - Max tokens: 1024 (sufficient for JSON response)
+        - Single user message with full prompt
+        - No system message (role is set in prompt text)
+
+    Response Parsing:
+        The raw response text is passed to _extract_json_from_response()
+        which handles various AI output formats (raw JSON, code blocks,
+        or embedded JSON within prose).
+
+    A prompt hash (MD5, first 16 chars) is stored for deduplication and
+    to detect when prompt content changes between analyses.
+
+    Args:
+        context: Game context dict from build_game_context()
+
+    Returns:
+        Dict with keys: ai_provider, model_used, analysis_type, prompt_hash,
+        response, recommended_bet, confidence_score, key_factors, reasoning,
+        tokens_used
+
+    Raises:
+        ValueError: If ANTHROPIC_API_KEY is not configured
+        anthropic.APIError: If the Claude API call fails
+    """
     if not claude_client:
         raise ValueError("Claude API key not configured")
 
@@ -631,7 +663,34 @@ def analyze_with_claude(context: dict) -> dict:
 
 
 def analyze_with_grok(context: dict) -> dict:
-    """Run analysis using Grok."""
+    """
+    Run game analysis using xAI's Grok API.
+
+    Calls Grok-3 via the OpenAI-compatible SDK (base URL: https://api.x.ai/v1).
+    Uses the same prompt as Claude for consistent comparison between providers.
+
+    API Call Details:
+        - Model: grok-3
+        - Max tokens: 1024
+        - OpenAI-compatible chat completions endpoint
+        - Single user message with full prompt
+
+    Response Parsing:
+        Identical to analyze_with_claude() - uses _extract_json_from_response()
+        for robust JSON extraction from the AI response text.
+
+    Args:
+        context: Game context dict from build_game_context()
+
+    Returns:
+        Dict with keys: ai_provider, model_used, analysis_type, prompt_hash,
+        response, recommended_bet, confidence_score, key_factors, reasoning,
+        tokens_used
+
+    Raises:
+        ValueError: If GROK_API_KEY is not configured
+        openai.APIError: If the Grok API call fails
+    """
     if not grok_client:
         raise ValueError("Grok API key not configured")
 
@@ -742,7 +801,22 @@ def get_quick_recommendation(context: dict) -> dict:
 
 
 class AIAnalyzer:
-    """Main class for AI analysis - maintains state and caching."""
+    """
+    Main class for AI analysis with in-memory caching.
+
+    Provides a stateful wrapper around the analyze_game() function,
+    adding an in-memory cache to avoid redundant API calls within
+    a single server process lifecycle.
+
+    The cache is keyed by "{game_id}:{provider}" and is not shared
+    across worker processes or persisted to disk. For persistent
+    caching, analyses are stored in the ai_analysis database table.
+
+    Usage:
+        analyzer = AIAnalyzer()
+        result = analyzer.analyze(game_id, provider="claude")
+        both = analyzer.analyze_both(game_id)
+    """
 
     def __init__(self):
         self.cache = {}
@@ -754,7 +828,21 @@ class AIAnalyzer:
         use_cache: bool = True,
         save: bool = True
     ) -> dict:
-        """Analyze a game with optional caching."""
+        """
+        Analyze a game with optional in-memory caching.
+
+        Cache key format: "{game_id}:{provider}" to allow separate
+        cached results for Claude and Grok on the same game.
+
+        Args:
+            game_id: UUID of the game to analyze
+            provider: AI provider ("claude" or "grok")
+            use_cache: If True, return cached result if available
+            save: If True, persist analysis to database
+
+        Returns:
+            Analysis result dict from analyze_game()
+        """
         cache_key = f"{game_id}:{provider}"
 
         if use_cache and cache_key in self.cache:
@@ -766,7 +854,29 @@ class AIAnalyzer:
         return result
 
     def analyze_both(self, game_id: str, save: bool = True) -> dict:
-        """Run analysis with both Claude and Grok."""
+        """
+        Run analysis with both Claude and Grok, then compute consensus.
+
+        Calls each available provider sequentially. If both succeed,
+        computes a consensus recommendation:
+        - If both providers agree on the same non-pass bet, averages
+          their confidence scores for a consensus recommendation.
+        - If providers disagree, consensus defaults to "pass" with 0.5
+          confidence, indicating no clear edge.
+
+        Error handling is per-provider: one provider failing does not
+        prevent the other from running. Errors are sanitized via
+        _sanitize_error_message() before being included in results.
+
+        Args:
+            game_id: UUID of the game to analyze
+            save: If True, persist each provider's analysis to database
+
+        Returns:
+            Dict with keys "claude", "grok", and "consensus" (when both
+            providers succeed). May include "claude_error" or "grok_error"
+            if a provider fails.
+        """
         results = {}
 
         if claude_client:
