@@ -332,6 +332,27 @@ supabase/migrations/
 | `latest_haslametrics_ratings` | Most recent Haslametrics per team |
 | `actionable_arbitrage` | Arbitrage opportunities >=10% edge |
 
+### 4. Seed Initial Data
+
+After running migrations, populate the database by running the data pipeline:
+
+```bash
+# Activate your virtual environment first, then from the project root:
+
+# Option A: Full refresh (fetches all data sources + runs AI analysis)
+python -m backend.data_collection.daily_refresh
+
+# Option B: Seed incrementally (recommended for first setup)
+# 1. Fetch games and spreads from The Odds API
+curl -X POST http://localhost:8000/refresh
+
+# 2. Or run individual scrapers:
+python -m backend.data_collection.haslametrics_scraper   # FREE, no credentials
+python -m backend.data_collection.kenpom_scraper          # Requires KenPom subscription
+```
+
+> **Note:** The `teams` table is auto-populated when games are first fetched. You do not need to manually insert team data.
+
 ---
 
 ## Daily Data Pipeline
