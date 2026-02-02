@@ -15,7 +15,7 @@ import time
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -35,6 +35,21 @@ logger = logging.getLogger(__name__)
 def get_current_request_id() -> Optional[str]:
     """Get the current request ID from context."""
     return request_id_var.get()
+
+
+# =============================================================================
+# Betting-Domain Error Codes
+# =============================================================================
+
+class BettingErrorCode:
+    """Betting-domain specific error codes for structured error responses."""
+    ODDS_UNAVAILABLE = "ODDS_UNAVAILABLE"
+    ANALYSIS_TIMEOUT = "ANALYSIS_TIMEOUT"
+    INVALID_GAME_STATE = "INVALID_GAME_STATE"
+    RATE_LIMITED = "RATE_LIMITED"
+    AI_SERVICE_ERROR = "AI_SERVICE_ERROR"
+    INVALID_GAME_ID = "INVALID_GAME_ID"
+    DATA_STALE = "DATA_STALE"
 
 
 # =============================================================================
@@ -89,9 +104,79 @@ class RateLimitException(ApiException):
     def __init__(self, retry_after: Optional[int] = None):
         super().__init__(
             429,
-            "RATE_LIMIT_EXCEEDED",
+            BettingErrorCode.RATE_LIMITED,
             "Too many requests. Please try again later.",
             {"retry_after": retry_after}
+        )
+
+
+class OddsUnavailableException(ApiException):
+    """503 - Odds data source is unavailable."""
+
+    def __init__(self, message: str = "Betting odds are currently unavailable"):
+        super().__init__(503, BettingErrorCode.ODDS_UNAVAILABLE, message)
+
+
+class AnalysisTimeoutException(ApiException):
+    """504 - AI analysis timed out."""
+
+    def __init__(self, provider: str = "unknown"):
+        super().__init__(
+            504,
+            BettingErrorCode.ANALYSIS_TIMEOUT,
+            f"AI analysis timed out for provider '{provider}'",
+            {"provider": provider},
+        )
+
+
+class InvalidGameStateException(ApiException):
+    """409 - Game is in an invalid state for the requested operation."""
+
+    def __init__(self, game_id: str, state: str, message: Optional[str] = None):
+        super().__init__(
+            409,
+            BettingErrorCode.INVALID_GAME_STATE,
+            message or f"Game '{game_id}' is in an invalid state: {state}",
+            {"game_id": game_id, "state": state},
+        )
+
+
+class AIServiceException(ApiException):
+    """503 - AI analysis service is unavailable."""
+
+    def __init__(self, provider: str, message: Optional[str] = None):
+        super().__init__(
+            503,
+            BettingErrorCode.AI_SERVICE_ERROR,
+            message or f"AI service '{provider}' is currently unavailable",
+            {"provider": provider},
+        )
+
+
+class InvalidGameIdException(ApiException):
+    """400 - Invalid game ID format."""
+
+    def __init__(self, game_id: str):
+        super().__init__(
+            400,
+            BettingErrorCode.INVALID_GAME_ID,
+            f"Invalid game ID format: '{game_id}'",
+            {"game_id": game_id},
+        )
+
+
+class DataStaleException(ApiException):
+    """503 - Data is stale and may not be reliable."""
+
+    def __init__(self, data_source: str, last_updated: Optional[str] = None):
+        details: dict[str, Any] = {"data_source": data_source}
+        if last_updated:
+            details["last_updated"] = last_updated
+        super().__init__(
+            503,
+            BettingErrorCode.DATA_STALE,
+            f"Data from '{data_source}' is stale and may not be reliable",
+            details,
         )
 
 
@@ -105,13 +190,15 @@ def error_response(
     details: Optional[dict] = None,
     request_id: Optional[str] = None
 ) -> dict:
-    """Create a standardized error response."""
-    response = {
+    """Create a standardized error response with correlation_id for debugging."""
+    correlation_id = str(uuid.uuid4())
+    response: dict = {
         "success": False,
         "error": {
-            "code": code,
+            "error_code": code,
             "message": message,
-        }
+            "correlation_id": correlation_id,
+        },
     }
     if details:
         response["error"]["details"] = details
@@ -242,16 +329,16 @@ async def api_exception_handler(request: Request, exc: ApiException) -> JSONResp
     """Handle custom API exceptions."""
     request_id = getattr(request.state, 'request_id', None) or get_current_request_id()
 
-    logger.warning(f"[{request_id}] API Error [{exc.code}]: {exc.message}")
+    body = error_response(exc.code, exc.message, exc.details, request_id)
+    correlation_id = body["error"]["correlation_id"]
+
+    logger.warning(
+        f"[{request_id}] [corr:{correlation_id}] API Error [{exc.code}]: {exc.message}"
+    )
 
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_response(
-            exc.code,
-            exc.message,
-            exc.details,
-            request_id
-        ),
+        content=body,
         headers={"X-Request-ID": request_id} if request_id else {}
     )
 
@@ -274,33 +361,63 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
                 for err in errors
             ]
         }
+        body = error_response("VALIDATION_ERROR", "Request validation failed", details, request_id)
+        correlation_id = body["error"]["correlation_id"]
+
+        logger.warning(
+            f"[{request_id}] [corr:{correlation_id}] Validation error: {len(errors)} field(s)"
+        )
+
         return JSONResponse(
             status_code=400,
-            content=error_response(
-                "VALIDATION_ERROR",
-                "Request validation failed",
-                details,
-                request_id
-            ),
+            content=body,
             headers={"X-Request-ID": request_id} if request_id else {}
         )
     raise exc
+
+
+async def http_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle FastAPI HTTPException with structured error response."""
+    from fastapi import HTTPException as _HTTPException
+
+    if not isinstance(exc, _HTTPException):
+        raise exc
+
+    request_id = getattr(request.state, 'request_id', None) or get_current_request_id()
+
+    body = error_response(
+        f"HTTP_{exc.status_code}",
+        str(exc.detail) if exc.detail else "An error occurred",
+        None,
+        request_id,
+    )
+    correlation_id = body["error"]["correlation_id"]
+
+    logger.warning(
+        f"[{request_id}] [corr:{correlation_id}] HTTPException {exc.status_code}: {exc.detail}"
+    )
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=body,
+        headers={"X-Request-ID": request_id} if request_id else {},
+    )
 
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unexpected exceptions with generic error response."""
     request_id = getattr(request.state, 'request_id', None) or get_current_request_id()
 
-    logger.exception(f"[{request_id}] Unhandled exception: {type(exc).__name__}: {exc}")
+    body = error_response("INTERNAL_ERROR", "An unexpected error occurred", None, request_id)
+    correlation_id = body["error"]["correlation_id"]
+
+    logger.exception(
+        f"[{request_id}] [corr:{correlation_id}] Unhandled exception: {type(exc).__name__}: {exc}"
+    )
 
     return JSONResponse(
         status_code=500,
-        content=error_response(
-            "INTERNAL_ERROR",
-            "An unexpected error occurred",
-            None,
-            request_id
-        ),
+        content=body,
         headers={"X-Request-ID": request_id} if request_id else {}
     )
 
@@ -364,17 +481,24 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"on path: {request.url.path}"
     )
 
+    body = error_response(
+        code=BettingErrorCode.RATE_LIMITED,
+        message="Too many requests. Please slow down and try again later.",
+        details={
+            "retry_after_seconds": retry_after,
+            "limit": str(exc.detail) if hasattr(exc, 'detail') else "Rate limit exceeded"
+        },
+        request_id=request_id,
+    )
+    correlation_id = body["error"]["correlation_id"]
+
+    logger.warning(
+        f"[{request_id}] [corr:{correlation_id}] Rate limit exceeded for {get_client_ip(request)}"
+    )
+
     return JSONResponse(
         status_code=429,
-        content=error_response(
-            code="RATE_LIMIT_EXCEEDED",
-            message="Too many requests. Please slow down and try again later.",
-            details={
-                "retry_after_seconds": retry_after,
-                "limit": str(exc.detail) if hasattr(exc, 'detail') else "Rate limit exceeded"
-            },
-            request_id=request_id
-        ),
+        content=body,
         headers={
             "X-Request-ID": request_id or "",
             "Retry-After": str(retry_after),

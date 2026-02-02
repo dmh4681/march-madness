@@ -124,8 +124,18 @@ from .middleware import (
     ValidationException,
     NotFoundException,
     ExternalApiException,
+    # Betting-domain exceptions
+    BettingErrorCode,
+    OddsUnavailableException,
+    AnalysisTimeoutException,
+    InvalidGameStateException,
+    AIServiceException,
+    InvalidGameIdException,
+    DataStaleException,
+    # Exception handlers
     api_exception_handler,
     validation_exception_handler,
+    http_exception_handler,
     general_exception_handler,
     success_response,
     error_response,
@@ -470,6 +480,7 @@ app.add_middleware(RequestSizeLimitMiddleware)
 # Register exception handlers
 app.add_exception_handler(ApiException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_exception_handler(Exception, general_exception_handler)
 
