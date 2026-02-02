@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, useMemo, memo } from 'react';
 import Link from 'next/link';
 import type { TodayGame } from '@/lib/types';
 import { ConfidenceBadge, getConfidenceDescription } from './ConfidenceBadge';
@@ -11,11 +11,11 @@ interface PicksListProps {
   title?: string;
 }
 
-export function PicksList({ games, title = "Today's Top Picks" }: PicksListProps) {
+export const PicksList = memo(function PicksList({ games, title = "Today's Top Picks" }: PicksListProps) {
   const headingId = useId();
 
   // Filter to only games with predictions and sort by edge
-  const picks = games
+  const picks = useMemo(() => games
     .filter(
       (g) =>
         g.confidence_tier &&
@@ -23,7 +23,7 @@ export function PicksList({ games, title = "Today's Top Picks" }: PicksListProps
         g.recommended_bet &&
         g.recommended_bet !== 'pass'
     )
-    .sort((a, b) => (b.edge_pct || 0) - (a.edge_pct || 0));
+    .sort((a, b) => (b.edge_pct || 0) - (a.edge_pct || 0)), [games]);
 
   if (picks.length === 0) {
     return (
@@ -56,7 +56,7 @@ export function PicksList({ games, title = "Today's Top Picks" }: PicksListProps
       </nav>
     </section>
   );
-}
+});
 
 interface PickCardProps {
   game: TodayGame;
@@ -64,7 +64,7 @@ interface PickCardProps {
   total: number;
 }
 
-function PickCard({ game, position, total }: PickCardProps) {
+const PickCard = memo(function PickCard({ game, position, total }: PickCardProps) {
   const isHomePick = game.recommended_bet?.includes('home');
   const pickedTeam = isHomePick ? game.home_team : game.away_team;
   const opponent = isHomePick ? game.away_team : game.home_team;
@@ -116,7 +116,7 @@ function PickCard({ game, position, total }: PickCardProps) {
       </div>
     </Link>
   );
-}
+});
 
 // Stats summary component
 interface StatsCardProps {

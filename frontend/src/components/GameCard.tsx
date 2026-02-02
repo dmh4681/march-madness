@@ -77,7 +77,7 @@
  * ```
  */
 
-import { useState, useId, useEffect, useRef } from 'react';
+import { useState, useId, useEffect, useRef, memo, useCallback } from 'react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import type { TodayGame } from '@/lib/types';
@@ -94,7 +94,7 @@ interface GameCardProps {
   showPrediction?: boolean;
 }
 
-export function GameCard({ game, showPrediction = true }: GameCardProps) {
+export const GameCard = memo(function GameCard({ game, showPrediction = true }: GameCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const predictionId = useId();
   const oddsId = useId();
@@ -138,6 +138,10 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
       overUnder: game.over_under
     };
   }, [game.home_spread, game.home_ml, game.away_ml, game.over_under, game.away_team, game.home_team, announce]);
+
+  const handleToggleExpand = useCallback(() => {
+    setIsExpanded(prev => !prev);
+  }, []);
 
   // Check if we have a real tip time or just a date
   // If tip_time equals date or has no time component, show TBD
@@ -340,10 +344,7 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
       {/* Mobile expand button - shows moneylines and total when tapped */}
       <button
         type="button"
-        onClick={(e) => {
-          e.preventDefault();
-          setIsExpanded(!isExpanded);
-        }}
+        onClick={handleToggleExpand}
         className="w-full sm:hidden flex items-center justify-center gap-1 py-3 px-4 border-t border-gray-800 text-gray-400 hover:text-white hover:bg-gray-800/50 transition-colors min-h-[44px]"
         aria-expanded={isExpanded}
         aria-label={isExpanded ? 'Show less details' : 'Show more details'}
@@ -391,19 +392,19 @@ export function GameCard({ game, showPrediction = true }: GameCardProps) {
       )}
     </article>
   );
-}
+});
 
 // Analytics section component that loads data lazily
 function AnalyticsSection({ gameId }: { gameId: string }) {
   const { analytics, isLoading, error, loadAnalytics, hasLoaded } = useGameAnalytics(gameId);
   const [isOpen, setIsOpen] = useState(false);
 
-  const handleToggle = () => {
+  const handleToggle = useCallback(() => {
     if (!hasLoaded && !isOpen) {
       loadAnalytics();
     }
     setIsOpen(!isOpen);
-  };
+  }, [hasLoaded, isOpen, loadAnalytics]);
 
   return (
     <div className="border-t border-gray-800">
@@ -588,7 +589,7 @@ export function GameCardWithAnalytics({ game, showPrediction = true }: GameCardP
 }
 
 // Compact version for sidebar/lists
-export function GameCardCompact({ game }: { game: TodayGame }) {
+export const GameCardCompact = memo(function GameCardCompact({ game }: { game: TodayGame }) {
   const confidenceDescription = getConfidenceDescription(game.confidence_tier);
   const gameLabel = `${game.away_team} at ${game.home_team}${
     game.confidence_tier && game.confidence_tier !== 'pass'
@@ -626,7 +627,7 @@ export function GameCardCompact({ game }: { game: TodayGame }) {
       </div>
     </Link>
   );
-}
+});
 
 // Compact skeleton for sidebar/lists
 export function GameCardCompactSkeleton() {

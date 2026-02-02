@@ -92,7 +92,7 @@
  * ```
  */
 
-import { useState } from 'react';
+import { useState, useMemo, useCallback, memo } from 'react';
 import type { AIAnalysis, AIProvider, OddsMovement, LiveAnalysis } from '@/lib/types';
 import { AIAnalysisSkeleton, AICompareViewSkeleton } from './ui/skeleton';
 import { InfoTooltip } from './Tooltip';
@@ -146,19 +146,23 @@ export function AIAnalysisPanel({
 }: AIAnalysisProps) {
   const [activeView, setActiveView] = useState<ViewMode>('claude');
 
-  const claudeAnalysis = analyses.find((a) => a.ai_provider === 'claude');
-  const grokAnalysis = analyses.find((a) => a.ai_provider === 'grok');
+  const claudeAnalysis = useMemo(() => analyses.find((a) => a.ai_provider === 'claude'), [analyses]);
+  const grokAnalysis = useMemo(() => analyses.find((a) => a.ai_provider === 'grok'), [analyses]);
   const hasBothAnalyses = claudeAnalysis && grokAnalysis;
 
   const activeAnalysis =
     activeView === 'claude' ? claudeAnalysis : activeView === 'grok' ? grokAnalysis : null;
+
+  const setClaudeView = useCallback(() => setActiveView('claude'), []);
+  const setGrokView = useCallback(() => setActiveView('grok'), []);
+  const setCompareView = useCallback(() => setActiveView('compare'), []);
 
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
       {/* Tab Header - touch-friendly on mobile */}
       <div className="flex border-b border-gray-800">
         <button
-          onClick={() => setActiveView('claude')}
+          onClick={setClaudeView}
           className={`flex-1 px-3 sm:px-4 py-3 sm:py-3 min-h-[48px] text-sm font-medium transition-colors ${
             activeView === 'claude'
               ? 'bg-gray-800 text-white border-b-2 border-orange-500'
@@ -178,7 +182,7 @@ export function AIAnalysisPanel({
           </span>
         </button>
         <button
-          onClick={() => setActiveView('grok')}
+          onClick={setGrokView}
           className={`flex-1 px-3 sm:px-4 py-3 sm:py-3 min-h-[48px] text-sm font-medium transition-colors ${
             activeView === 'grok'
               ? 'bg-gray-800 text-white border-b-2 border-blue-500'
@@ -199,7 +203,7 @@ export function AIAnalysisPanel({
         </button>
         {hasBothAnalyses && (
           <button
-            onClick={() => setActiveView('compare')}
+            onClick={setCompareView}
             className={`flex-1 px-3 sm:px-4 py-3 sm:py-3 min-h-[48px] text-sm font-medium transition-colors ${
               activeView === 'compare'
                 ? 'bg-gray-800 text-white border-b-2 border-purple-500'
@@ -335,9 +339,12 @@ export function AIAnalysisPanel({
  * - Both pass: Strong signal that no edge exists
  * - Split decision: Exercise caution, investigate why they differ
  */
-function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis }) {
+const CompareView = memo(function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis }) {
   const agreesOnBet = claude.recommended_bet === grok.recommended_bet;
-  const avgConfidence = ((claude.confidence_score || 0) + (grok.confidence_score || 0)) / 2;
+  const avgConfidence = useMemo(
+    () => ((claude.confidence_score || 0) + (grok.confidence_score || 0)) / 2,
+    [claude.confidence_score, grok.confidence_score]
+  );
 
   return (
     <div className="space-y-4 sm:space-y-6">
@@ -489,7 +496,7 @@ function CompareView({ claude, grok }: { claude: AIAnalysis; grok: AIAnalysis })
       </div>
     </div>
   );
-}
+});
 
 function AnalysisErrorDisplay({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const classified = classifyError(error);
