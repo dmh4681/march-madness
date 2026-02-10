@@ -234,31 +234,6 @@ export default async function GamesPage() {
 
       {/* Main Content */}
       <main id="main-content" className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-8" tabIndex={-1}>
-        {/* Filters - horizontally scrollable on mobile */}
-        <div className="mb-4 sm:mb-6 -mx-3 px-3 sm:mx-0 sm:px-0">
-          <div className="flex gap-2 sm:gap-4 overflow-x-auto pb-2 sm:pb-0 scrollbar-hide">
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-green-500/20 text-green-400 rounded cursor-pointer hover:bg-green-500/30 active:bg-green-500/40 transition-colors">
-                High Confidence
-              </span>
-              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-yellow-500/20 text-yellow-400 rounded cursor-pointer hover:bg-yellow-500/30 active:bg-yellow-500/40 transition-colors">
-                Medium
-              </span>
-              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-gray-700 text-gray-400 rounded cursor-pointer hover:bg-gray-600 active:bg-gray-500 transition-colors">
-                All Games
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 sm:ml-auto">
-              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-blue-500/20 text-blue-400 rounded cursor-pointer hover:bg-blue-500/30 active:bg-blue-500/40 transition-colors whitespace-nowrap">
-                Conference Only
-              </span>
-              <span className="text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center bg-purple-500/20 text-purple-400 rounded cursor-pointer hover:bg-purple-500/30 active:bg-purple-500/40 transition-colors whitespace-nowrap">
-                Ranked Matchups
-              </span>
-            </div>
-          </div>
-        </div>
-
         {/* Games List with Load More */}
         <GamesList initialGames={initialGames} days={7} />
       </main>

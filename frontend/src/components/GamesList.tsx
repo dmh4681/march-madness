@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import { GameCard, GameCardSkeleton } from '@/components/GameCard';
 import { useInfiniteGames } from '@/hooks/useInfiniteGames';
@@ -65,7 +65,25 @@ function GamesListContent({ initialGames = [], days = 7 }: GamesListProps) {
     totalGames,
   } = useInfiniteGames({ days, initialData: initialGames });
 
-  const gamesByDate = useMemo(() => groupGamesByDate(games), [games]);
+  type GameFilter = 'all' | 'high' | 'medium' | 'conference' | 'ranked';
+  const [activeFilter, setActiveFilter] = useState<GameFilter>('all');
+
+  const filteredGames = useMemo(() => {
+    switch (activeFilter) {
+      case 'high':
+        return games.filter(g => g.confidence_tier === 'high');
+      case 'medium':
+        return games.filter(g => g.confidence_tier === 'medium');
+      case 'conference':
+        return games.filter(g => g.is_conference_game);
+      case 'ranked':
+        return games.filter(g => g.home_rank !== null || g.away_rank !== null);
+      default:
+        return games;
+    }
+  }, [games, activeFilter]);
+
+  const gamesByDate = useMemo(() => groupGamesByDate(filteredGames), [filteredGames]);
   const highConfidenceCount = useMemo(
     () => games.filter(g => g.confidence_tier === 'high').length,
     [games]
@@ -106,14 +124,54 @@ function GamesListContent({ initialGames = [], days = 7 }: GamesListProps) {
     );
   }
 
+  const filters: { key: GameFilter; label: string; colors: string; activeColors: string }[] = [
+    { key: 'high', label: 'High Confidence', colors: 'bg-green-500/20 text-green-400 hover:bg-green-500/30', activeColors: 'bg-green-500/40 text-green-300 ring-1 ring-green-500' },
+    { key: 'medium', label: 'Medium', colors: 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30', activeColors: 'bg-yellow-500/40 text-yellow-300 ring-1 ring-yellow-500' },
+    { key: 'all', label: 'All Games', colors: 'bg-gray-700 text-gray-400 hover:bg-gray-600', activeColors: 'bg-gray-600 text-gray-200 ring-1 ring-gray-500' },
+    { key: 'conference', label: 'Conference Only', colors: 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30', activeColors: 'bg-blue-500/40 text-blue-300 ring-1 ring-blue-500' },
+    { key: 'ranked', label: 'Ranked Matchups', colors: 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30', activeColors: 'bg-purple-500/40 text-purple-300 ring-1 ring-purple-500' },
+  ];
+
   return (
     <>
+      {/* Filters */}
+      <div className="mb-4 sm:mb-6 -mx-3 px-3 sm:mx-0 sm:px-0">
+        <div className="flex gap-2 sm:gap-4 overflow-x-auto pb-2 sm:pb-0 scrollbar-hide">
+          <div className="flex items-center gap-2 shrink-0">
+            {filters.slice(0, 3).map(f => (
+              <button
+                key={f.key}
+                onClick={() => setActiveFilter(f.key)}
+                className={`text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center rounded transition-colors ${
+                  activeFilter === f.key ? f.activeColors : f.colors
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 shrink-0 sm:ml-auto">
+            {filters.slice(3).map(f => (
+              <button
+                key={f.key}
+                onClick={() => setActiveFilter(f.key)}
+                className={`text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1 flex items-center rounded transition-colors whitespace-nowrap ${
+                  activeFilter === f.key ? f.activeColors : f.colors
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
       {/* Page stats */}
       <div className="mb-4 sm:mb-8 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-white mb-1 sm:mb-2">Upcoming Games</h1>
           <p className="text-sm sm:text-base text-gray-400">
-            Showing {games.length} of {totalGames} games over the next {days} days
+            Showing {filteredGames.length}{activeFilter !== 'all' ? ` (filtered)` : ''} of {totalGames} games over the next {days} days
             {highConfidenceCount > 0 && (
               <span className="ml-2 text-green-400">
                 ({highConfidenceCount} high confidence)

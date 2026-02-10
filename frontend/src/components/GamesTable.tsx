@@ -1,9 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { format, parseISO } from 'date-fns';
 import type { TodayGame } from '@/lib/types';
 import { formatSpread, formatMoneyline } from '@/lib/api';
+import { PredictionMarketModal } from '@/components/PredictionMarketModal';
 
 /**
  * Parse a date string (YYYY-MM-DD) as a local date, not UTC.
@@ -30,6 +32,8 @@ interface GamesTableProps {
 }
 
 export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
+  const [pmModalGame, setPmModalGame] = useState<TodayGame | null>(null);
+
   if (games.length === 0) {
     return (
       <div className="text-center py-8 text-gray-400">
@@ -42,33 +46,44 @@ export function GamesTable({ games, showAiPick = false }: GamesTableProps) {
   const hasAnyMoneylines = games.some(g => g.home_ml !== null || g.away_ml !== null);
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-gray-700 text-gray-400 text-left">
-            <th className="py-3 px-2 font-medium">Date</th>
-            <th className="py-3 px-2 font-medium">Matchup</th>
-            <th className="py-3 px-2 font-medium text-center">Spread</th>
-            <th className="py-3 px-2 font-medium text-center">O/U</th>
-            {hasAnyMoneylines && <th className="py-3 px-2 font-medium text-center">ML</th>}
-            <th className="py-3 px-2 font-medium text-center">Pick</th>
-            <th className="py-3 px-2 font-medium text-center">AI</th>
-            <th className="py-3 px-2 font-medium text-center">PM</th>
-            <th className="py-3 px-2 font-medium text-center">Conf</th>
-            <th className="py-3 px-2 font-medium text-center">Edge</th>
-          </tr>
-        </thead>
-        <tbody>
-          {games.map((game) => (
-            <GameRow key={game.id} game={game} showMoneyline={hasAnyMoneylines} />
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-700 text-gray-400 text-left">
+              <th className="py-3 px-2 font-medium">Date</th>
+              <th className="py-3 px-2 font-medium">Matchup</th>
+              <th className="py-3 px-2 font-medium text-center">Spread</th>
+              <th className="py-3 px-2 font-medium text-center">O/U</th>
+              {hasAnyMoneylines && <th className="py-3 px-2 font-medium text-center">ML</th>}
+              <th className="py-3 px-2 font-medium text-center">Pick</th>
+              <th className="py-3 px-2 font-medium text-center">AI</th>
+              <th className="py-3 px-2 font-medium text-center">PM</th>
+              <th className="py-3 px-2 font-medium text-center">Conf</th>
+              <th className="py-3 px-2 font-medium text-center">Edge</th>
+            </tr>
+          </thead>
+          <tbody>
+            {games.map((game) => (
+              <GameRow key={game.id} game={game} showMoneyline={hasAnyMoneylines} onPmClick={setPmModalGame} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {pmModalGame && (
+        <PredictionMarketModal
+          gameId={pmModalGame.id}
+          homeTeam={pmModalGame.home_team}
+          awayTeam={pmModalGame.away_team}
+          onClose={() => setPmModalGame(null)}
+        />
+      )}
+    </>
   );
 }
 
-function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneyline?: boolean }) {
+function GameRow({ game, showMoneyline = true, onPmClick }: { game: TodayGame; showMoneyline?: boolean; onPmClick?: (game: TodayGame) => void }) {
   const getConfidenceStyle = (tier: string | null) => {
     switch (tier) {
       case 'high':
@@ -184,19 +199,17 @@ function GameRow({ game, showMoneyline = true }: { game: TodayGame; showMoneylin
       {/* Prediction Markets */}
       <td className="py-3 px-2 text-center">
         {game.has_prediction_data || game.has_arbitrage_signal ? (
-          <div className="flex items-center justify-center gap-1">
+          <button
+            onClick={() => onPmClick?.(game)}
+            className="flex items-center justify-center gap-1 w-full cursor-pointer hover:opacity-80 transition-opacity"
+            title="Click to view prediction market details"
+          >
             {game.has_arbitrage_signal ? (
-              <span
-                className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"
-                title="Arbitrage opportunity detected"
-              />
+              <span className="w-2 h-2 rounded-full bg-yellow-500 animate-pulse" />
             ) : (
-              <span
-                className="w-2 h-2 rounded-full bg-purple-500"
-                title="Prediction market data available"
-              />
+              <span className="w-2 h-2 rounded-full bg-purple-500" />
             )}
-          </div>
+          </button>
         ) : (
           <span className="text-gray-600 text-xs">-</span>
         )}

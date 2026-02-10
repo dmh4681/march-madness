@@ -1,4 +1,4 @@
-import type { PredictionResponse, AIAnalysisResponse, AIProvider } from './types';
+import type { PredictionResponse, AIAnalysisResponse, AIProvider, PredictionMarket, ArbitrageOpportunity } from './types';
 
 const PYTHON_BACKEND_URL = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL || 'http://localhost:8000';
 
@@ -70,6 +70,15 @@ class APIClient {
   // Trigger data refresh
   async refresh(): Promise<{ status: string; games_updated: number }> {
     return this.fetch('/refresh', { method: 'POST' });
+  }
+
+  // Get prediction market data for a game
+  async getGamePredictionData(gameId: string): Promise<{
+    game_id: string;
+    markets: PredictionMarket[];
+    arbitrage: ArbitrageOpportunity[];
+  }> {
+    return this.fetch(`/games/${gameId}/prediction-data`);
   }
 
   // Get backtest results

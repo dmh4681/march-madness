@@ -2180,6 +2180,85 @@ def get_prediction_markets():
         return {"error": str(e)}
 
 
+@app.get("/games/{game_id}/prediction-data", tags=["Prediction Markets"])
+def get_game_prediction_data(game_id: Annotated[str, Path(description="Game ID (UUID format)")]):
+    """
+    Get prediction market data and arbitrage opportunities for a specific game.
+
+    Returns markets matched to the game's teams plus any detected arbitrage.
+    """
+    # Validate UUID format
+    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
+    if not uuid_pattern.match(game_id):
+        raise HTTPException(status_code=400, detail="Invalid game ID format")
+
+    try:
+        from .supabase_client import get_supabase
+        supabase = get_supabase()
+
+        # Get the game's team IDs
+        game_result = supabase.table("games").select(
+            "id, home_team_id, away_team_id"
+        ).eq("id", game_id).single().execute()
+
+        if not game_result.data:
+            raise HTTPException(status_code=404, detail="Game not found")
+
+        game = game_result.data
+        team_ids = [t for t in [game.get("home_team_id"), game.get("away_team_id")] if t]
+
+        # Get prediction markets for these teams
+        markets = []
+        if team_ids:
+            pm_result = supabase.table("prediction_markets").select(
+                "id, source, market_id, title, market_type, status, team_id, game_id, volume, liquidity, end_date, captured_at"
+            ).in_("team_id", team_ids).eq("status", "open").execute()
+            markets = pm_result.data or []
+
+            # Get prediction market prices for outcomes
+            market_ids = [m["id"] for m in markets]
+            if market_ids:
+                prices_result = supabase.table("prediction_market_prices").select(
+                    "prediction_market_id, outcome_name, price, volume"
+                ).in_("prediction_market_id", market_ids).execute()
+                prices = prices_result.data or []
+
+                # Group prices by market
+                price_map: dict = {}
+                for p in prices:
+                    mid = p["prediction_market_id"]
+                    if mid not in price_map:
+                        price_map[mid] = []
+                    price_map[mid].append({
+                        "name": p.get("outcome_name", ""),
+                        "price": p.get("price", 0),
+                        "volume": p.get("volume"),
+                    })
+
+                for m in markets:
+                    m["outcomes"] = price_map.get(m["id"], [])
+            else:
+                for m in markets:
+                    m["outcomes"] = []
+
+        # Get arbitrage opportunities for this game
+        arb_result = supabase.table("arbitrage_opportunities").select(
+            "id, game_id, prediction_market_id, bet_type, sportsbook_implied_prob, prediction_market_prob, delta, edge_direction, is_actionable, captured_at"
+        ).eq("game_id", game_id).eq("is_actionable", True).execute()
+        arbitrage = arb_result.data or []
+
+        return {
+            "game_id": game_id,
+            "markets": markets,
+            "arbitrage": arbitrage,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get prediction data for game {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load prediction market data")
+
+
 @app.get("/debug-pm-match", tags=["Debug"])
 def debug_pm_match():
     """
