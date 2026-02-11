@@ -3004,6 +3004,187 @@ def batch_upsert_teams(request: Request, body: BatchTeamRequest):
     return BatchResponse(created=created, updated=updated, errors=errors_list, results=results)
 
 
+# =============================================================================
+# Batch AI Analysis
+# =============================================================================
+
+import time
+import uuid as uuid_mod
+import threading
+from collections import OrderedDict
+from fastapi import BackgroundTasks
+
+# In-memory job store for batch analysis
+_batch_analysis_jobs: dict = {}
+_batch_jobs_lock = threading.Lock()
+_BATCH_JOBS_MAX = 50
+
+
+def _cleanup_batch_jobs() -> None:
+    """Remove oldest jobs when exceeding max."""
+    if len(_batch_analysis_jobs) <= _BATCH_JOBS_MAX:
+        return
+    # Sort by created_at, remove oldest
+    sorted_ids = sorted(
+        _batch_analysis_jobs.keys(),
+        key=lambda jid: _batch_analysis_jobs[jid].get("created_at", ""),
+    )
+    while len(sorted_ids) > _BATCH_JOBS_MAX:
+        oldest = sorted_ids.pop(0)
+        _batch_analysis_jobs.pop(oldest, None)
+
+
+class BatchAnalyzeRequest(BaseModel):
+    """Request to submit a batch AI analysis job."""
+    game_ids: list[str] = Field(..., min_length=1, max_length=20, description="Game UUIDs to analyze (max 20)")
+    provider: Literal["claude", "grok"] = Field(default="claude", description="AI provider")
+
+    @field_validator("game_ids")
+    @classmethod
+    def validate_game_ids(cls, v: list[str]) -> list[str]:
+        for gid in v:
+            if not UUID_PATTERN.match(gid):
+                raise ValueError(f"Invalid game_id UUID: {gid}")
+        return v
+
+
+class BatchAnalyzeSubmitResponse(BaseModel):
+    """Response after submitting a batch analysis job."""
+    job_id: str
+    status: str
+    total_games: int
+    poll_url: str
+
+
+class BatchGameResult(BaseModel):
+    """Per-game result within a batch analysis."""
+    game_id: str
+    status: str  # "completed", "failed", "pending"
+    recommended_bet: Optional[str] = None
+    confidence_score: Optional[float] = None
+    key_factors: Optional[list[str]] = None
+    error: Optional[str] = None
+
+
+class BatchAnalyzeStatusResponse(BaseModel):
+    """Status response for a batch analysis job."""
+    job_id: str
+    status: str  # "processing", "completed", "failed"
+    completed: int
+    failed: int
+    total: int
+    results: list[BatchGameResult]
+
+
+def _run_batch_analysis(job_id: str, game_ids: list[str], provider: str) -> None:
+    """Background task: analyze games sequentially."""
+    with _batch_jobs_lock:
+        job = _batch_analysis_jobs.get(job_id)
+        if not job:
+            return
+        job["status"] = "processing"
+
+    results = []
+
+    for i, game_id in enumerate(game_ids):
+        try:
+            analysis = analyze_game(game_id, provider, save=True)
+
+            results.append({
+                "game_id": game_id,
+                "status": "completed",
+                "recommended_bet": analysis.get("recommended_bet"),
+                "confidence_score": analysis.get("confidence_score"),
+                "key_factors": analysis.get("key_factors", []),
+                "error": None,
+            })
+        except Exception as e:
+            logger.error(f"Batch analysis failed for game {game_id}: {e}")
+            results.append({
+                "game_id": game_id,
+                "status": "failed",
+                "error": str(e)[:200],
+            })
+
+        # Update progress
+        with _batch_jobs_lock:
+            job = _batch_analysis_jobs.get(job_id)
+            if job:
+                job["results"] = results
+                job["completed"] = sum(1 for r in results if r["status"] == "completed")
+                job["failed"] = sum(1 for r in results if r["status"] == "failed")
+
+        # Rate limit: pause between games to avoid overwhelming AI APIs
+        if i < len(game_ids) - 1:
+            time.sleep(2)
+
+    # Mark job done
+    with _batch_jobs_lock:
+        job = _batch_analysis_jobs.get(job_id)
+        if job:
+            job["status"] = "completed"
+            job["completed_at"] = datetime.now(EASTERN_TZ).isoformat()
+
+
+@app.post("/api/v1/batch-analyze", response_model=BatchAnalyzeSubmitResponse, tags=["AI Analysis"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def submit_batch_analysis(request: Request, body: BatchAnalyzeRequest, background_tasks: BackgroundTasks):
+    """
+    Submit a batch AI analysis job for multiple games.
+
+    Processes games sequentially with a 2-second pause between each to avoid
+    overwhelming AI APIs. Returns a job ID for polling progress.
+
+    Max 20 games per batch.
+    """
+    job_id = str(uuid_mod.uuid4())
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "provider": body.provider,
+        "game_ids": body.game_ids,
+        "total": len(body.game_ids),
+        "completed": 0,
+        "failed": 0,
+        "results": [],
+        "created_at": datetime.now(EASTERN_TZ).isoformat(),
+        "completed_at": None,
+    }
+
+    with _batch_jobs_lock:
+        _batch_analysis_jobs[job_id] = job
+        _cleanup_batch_jobs()
+
+    background_tasks.add_task(_run_batch_analysis, job_id, body.game_ids, body.provider)
+
+    return BatchAnalyzeSubmitResponse(
+        job_id=job_id,
+        status="queued",
+        total_games=len(body.game_ids),
+        poll_url=f"/api/v1/batch-analyze/{job_id}",
+    )
+
+
+@app.get("/api/v1/batch-analyze/{job_id}", response_model=BatchAnalyzeStatusResponse, tags=["AI Analysis"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_batch_analysis_status(request: Request, job_id: str = Path(..., description="Batch analysis job ID")):
+    """Poll for batch analysis job status and per-game results."""
+    with _batch_jobs_lock:
+        job = _batch_analysis_jobs.get(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Batch analysis job not found")
+
+    return BatchAnalyzeStatusResponse(
+        job_id=job["job_id"],
+        status=job["status"],
+        completed=job["completed"],
+        failed=job["failed"],
+        total=job["total"],
+        results=[BatchGameResult(**r) for r in job.get("results", [])],
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
