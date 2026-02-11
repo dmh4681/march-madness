@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import type { GameAnalyticsResponse } from '@/lib/types';
+import { fetchWithRetry, categorizeError } from '@/lib/fetchWithRetry';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const ANALYTICS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -53,10 +54,15 @@ export function useGameAnalytics(gameId: string): UseGameAnalyticsReturn {
     setError(null);
 
     try {
-      const response = await fetch(`${API_URL}/games/${gameId}/analytics`);
+      const response = await fetchWithRetry(
+        `${API_URL}/games/${gameId}/analytics`,
+        undefined,
+        { maxRetries: 2, timeoutMs: 8000 }
+      );
 
       if (!response.ok) {
-        throw new Error('Failed to fetch analytics');
+        const cat = categorizeError(null, response.status);
+        throw new Error(cat.message);
       }
 
       const data: GameAnalyticsResponse = await response.json();
@@ -70,8 +76,9 @@ export function useGameAnalytics(gameId: string): UseGameAnalyticsReturn {
       setAnalytics(data);
       setHasLoaded(true);
     } catch (err) {
-      console.error('Error fetching game analytics:', err);
-      setError('Failed to load analytics');
+      const cat = categorizeError(err);
+      console.error('Error fetching game analytics:', cat.technical);
+      setError(cat.message);
     } finally {
       setIsLoading(false);
     }

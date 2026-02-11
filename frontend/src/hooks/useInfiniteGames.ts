@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { TodayGame } from '@/lib/types';
+import { fetchWithRetry, categorizeError } from '@/lib/fetchWithRetry';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const PAGE_SIZE = 20;
@@ -100,12 +101,15 @@ export function useInfiniteGames(options: UseInfiniteGamesOptions = {}): UseInfi
     }
 
     try {
-      const response = await fetch(
-        `${API_URL}/games?days=${days}&page=${page}&page_size=${PAGE_SIZE}`
+      const response = await fetchWithRetry(
+        `${API_URL}/games?days=${days}&page=${page}&page_size=${PAGE_SIZE}`,
+        undefined,
+        { maxRetries: 3, timeoutMs: 10000 }
       );
 
       if (!response.ok) {
-        throw new Error('Failed to fetch games');
+        const cat = categorizeError(null, response.status);
+        throw new Error(cat.message);
       }
 
       const data: PaginatedGamesResponse = await response.json();
@@ -123,7 +127,8 @@ export function useInfiniteGames(options: UseInfiniteGamesOptions = {}): UseInfi
 
       return data;
     } catch (err) {
-      console.error('Error fetching games:', err);
+      const cat = categorizeError(err);
+      console.error('Error fetching games:', cat.technical);
       return null;
     }
   }, [days]);
@@ -145,7 +150,7 @@ export function useInfiniteGames(options: UseInfiniteGamesOptions = {}): UseInfi
         setTotalGames(data.total_games);
         setHasMore(data.has_more);
       } else {
-        setError('Failed to load games');
+        setError('Unable to load games. Check your connection and try again.');
       }
 
       setIsLoading(false);
@@ -176,7 +181,7 @@ export function useInfiniteGames(options: UseInfiniteGamesOptions = {}): UseInfi
       setTotalGames(data.total_games);
       setHasMore(data.has_more);
     } else {
-      setError('Failed to load more games');
+      setError('Unable to load more games. Please try again.');
     }
 
     setIsLoadingMore(false);
@@ -199,7 +204,7 @@ export function useInfiniteGames(options: UseInfiniteGamesOptions = {}): UseInfi
       setTotalGames(data.total_games);
       setHasMore(data.has_more);
     } else {
-      setError('Failed to refresh games');
+      setError('Unable to refresh games. Please try again.');
     }
 
     setIsLoading(false);
