@@ -479,14 +479,14 @@ class TestHaslametricsFetchRatings:
     @patch('backend.data_collection.haslametrics_scraper.requests.get')
     def test_correct_url_construction(self, mock_requests):
         """Test URL is constructed correctly for different seasons."""
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_response = MagicMock()
         mock_response.content = b'<?xml version="1.0"?><ratings></ratings>'
         mock_response.raise_for_status = MagicMock()
         mock_requests.return_value = mock_response
 
-        fetch_haslametrics_ratings(2025)
+        _fetch_haslametrics_ratings_uncached(2025)
 
         # Verify URL uses 2-digit year
         call_args = mock_requests.call_args
@@ -495,14 +495,14 @@ class TestHaslametricsFetchRatings:
     @patch('backend.data_collection.haslametrics_scraper.requests.get')
     def test_correct_headers_sent(self, mock_requests):
         """Test proper headers are sent to avoid blocking."""
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_response = MagicMock()
         mock_response.content = b'<?xml version="1.0"?><ratings></ratings>'
         mock_response.raise_for_status = MagicMock()
         mock_requests.return_value = mock_response
 
-        fetch_haslametrics_ratings(2025)
+        _fetch_haslametrics_ratings_uncached(2025)
 
         call_kwargs = mock_requests.call_args[1]
         assert "headers" in call_kwargs
@@ -513,11 +513,11 @@ class TestHaslametricsFetchRatings:
     def test_handles_timeout(self, mock_requests):
         """Test handling of request timeout."""
         import requests
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_requests.side_effect = requests.exceptions.Timeout("Request timed out")
 
-        result = fetch_haslametrics_ratings(2025)
+        result = _fetch_haslametrics_ratings_uncached(2025)
 
         assert result is None
 
@@ -525,11 +525,11 @@ class TestHaslametricsFetchRatings:
     def test_handles_connection_error(self, mock_requests):
         """Test handling of connection errors."""
         import requests
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_requests.side_effect = requests.exceptions.ConnectionError("Connection refused")
 
-        result = fetch_haslametrics_ratings(2025)
+        result = _fetch_haslametrics_ratings_uncached(2025)
 
         assert result is None
 
@@ -537,41 +537,41 @@ class TestHaslametricsFetchRatings:
     def test_handles_http_error(self, mock_requests):
         """Test handling of HTTP errors."""
         import requests
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("404 Not Found")
         mock_requests.return_value = mock_response
 
-        result = fetch_haslametrics_ratings(2025)
+        result = _fetch_haslametrics_ratings_uncached(2025)
 
         assert result is None
 
     @patch('backend.data_collection.haslametrics_scraper.requests.get')
     def test_handles_malformed_xml(self, mock_requests, sample_haslametrics_malformed_xml):
         """Test handling of malformed XML."""
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_response = MagicMock()
         mock_response.content = sample_haslametrics_malformed_xml
         mock_response.raise_for_status = MagicMock()
         mock_requests.return_value = mock_response
 
-        result = fetch_haslametrics_ratings(2025)
+        result = _fetch_haslametrics_ratings_uncached(2025)
 
         assert result is None
 
     @patch('backend.data_collection.haslametrics_scraper.requests.get')
     def test_handles_empty_response(self, mock_requests, sample_haslametrics_empty_xml):
         """Test handling of empty XML response."""
-        from backend.data_collection.haslametrics_scraper import fetch_haslametrics_ratings
+        from backend.data_collection.haslametrics_scraper import _fetch_haslametrics_ratings_uncached
 
         mock_response = MagicMock()
         mock_response.content = sample_haslametrics_empty_xml
         mock_response.raise_for_status = MagicMock()
         mock_requests.return_value = mock_response
 
-        result = fetch_haslametrics_ratings(2025)
+        result = _fetch_haslametrics_ratings_uncached(2025)
 
         assert result is not None
         assert len(result) == 0
