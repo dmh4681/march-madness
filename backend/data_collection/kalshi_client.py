@@ -287,7 +287,7 @@ class KalshiClient:
             "description": raw.get("subtitle") or raw.get("rules_primary"),
             "market_type": market_type,
             "outcomes": outcomes,
-            "status": raw.get("status", "open"),
+            "status": "open" if raw.get("status") in ("open", "active") else raw.get("status", "open"),
             "volume": float(raw.get("volume", 0) or 0),
             "liquidity": float(raw.get("open_interest", 0) or 0),
             "end_date": raw.get("close_time"),

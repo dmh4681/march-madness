@@ -170,6 +170,30 @@ async def refresh_prediction_markets() -> dict:
         await kalshi_client.close()
 
     # -------------------------------------------------------------------------
+    # 2b. Post-process: match team_id → game_id for markets missing game_id
+    # -------------------------------------------------------------------------
+    game_id_updates = 0
+    for market in all_markets:
+        if market.get("team_id") and not market.get("game_id"):
+            team_id = market["team_id"]
+            matching_games = [
+                g for g in games
+                if g.get("home_team_id") == team_id or g.get("away_team_id") == team_id
+            ]
+            if len(matching_games) == 1:
+                market["game_id"] = matching_games[0]["id"]
+                try:
+                    supabase.table("prediction_markets").update(
+                        {"game_id": matching_games[0]["id"]}
+                    ).eq("source", market["source"]).eq("market_id", market["market_id"]).execute()
+                    game_id_updates += 1
+                except Exception as e:
+                    logger.warning(f"Failed to update game_id for market {market['market_id']}: {e}")
+
+    if game_id_updates:
+        logger.info(f"Post-processing: matched {game_id_updates} markets to game_id via team_id")
+
+    # -------------------------------------------------------------------------
     # 3. Detect arbitrage for games with prediction data
     # -------------------------------------------------------------------------
     # Get fresh game data with spreads
