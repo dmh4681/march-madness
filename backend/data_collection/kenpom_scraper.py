@@ -442,27 +442,27 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
                 "adj_efficiency_margin": safe_float(get_col(row, "AdjEM", "AdjEM.", "NetRtg")),
                 # Adjusted Offense: points per 100 possessions, adjusted for opponent
                 "adj_offense": safe_float(get_col(row, "AdjO", "AdjO.", "AdjOE")),
-                "adj_offense_rank": safe_int(get_col(row, "AdjO Rank", "AdjO.1", "AdjO Rk")),
+                "adj_offense_rank": safe_int(get_col(row, "AdjO.Rank", "AdjO Rank", "AdjO.1", "AdjO Rk")),
                 # Adjusted Defense: points allowed per 100 possessions (lower = better)
                 "adj_defense": safe_float(get_col(row, "AdjD", "AdjD.", "AdjDE")),
-                "adj_defense_rank": safe_int(get_col(row, "AdjD Rank", "AdjD.1", "AdjD Rk")),
+                "adj_defense_rank": safe_int(get_col(row, "AdjD.Rank", "AdjD Rank", "AdjD.1", "AdjD Rk")),
                 # Adjusted Tempo: possessions per 40 minutes
                 "adj_tempo": safe_float(get_col(row, "AdjT", "AdjT.", "AdjTempo")),
-                "adj_tempo_rank": safe_int(get_col(row, "AdjT Rank", "AdjT.1", "AdjT Rk")),
+                "adj_tempo_rank": safe_int(get_col(row, "AdjT.Rank", "AdjT Rank", "AdjT.1", "AdjT Rk")),
                 # Luck: deviation from expected record (high = due for regression)
                 "luck": safe_float(get_col(row, "Luck", "Luck.")),
-                "luck_rank": safe_int(get_col(row, "Luck Rank", "Luck.1", "Luck Rk")),
+                "luck_rank": safe_int(get_col(row, "Luck.Rank", "Luck Rank", "Luck.1", "Luck Rk")),
                 # Strength of Schedule based on opponent efficiency margins
-                "sos_adj_em": safe_float(get_col(row, "SOS AdjEM", "Strength of Schedule AdjEM", "SOS")),
-                "sos_adj_em_rank": safe_int(get_col(row, "SOS AdjEM Rank", "SOS AdjEM.1", "SOS Rk")),
+                "sos_adj_em": safe_float(get_col(row, "SOS-AdjEM", "SOS AdjEM", "Strength of Schedule AdjEM", "SOS")),
+                "sos_adj_em_rank": safe_int(get_col(row, "SOS-AdjEM.Rank", "SOS AdjEM Rank", "SOS AdjEM.1", "SOS Rk")),
                 # Average opponent offensive/defensive strength
-                "sos_opp_offense": safe_float(get_col(row, "OppO", "SOS OppO", "OppO.")),
-                "sos_opp_offense_rank": safe_int(get_col(row, "OppO Rank", "OppO.1", "OppO Rk")),
-                "sos_opp_defense": safe_float(get_col(row, "OppD", "SOS OppD", "OppD.")),
-                "sos_opp_defense_rank": safe_int(get_col(row, "OppD Rank", "OppD.1", "OppD Rk")),
+                "sos_opp_offense": safe_float(get_col(row, "SOS-OppO", "OppO", "SOS OppO", "OppO.")),
+                "sos_opp_offense_rank": safe_int(get_col(row, "SOS-OppO.Rank", "OppO Rank", "OppO.1", "OppO Rk")),
+                "sos_opp_defense": safe_float(get_col(row, "SOS-OppD", "OppD", "SOS OppD", "OppD.")),
+                "sos_opp_defense_rank": safe_int(get_col(row, "SOS-OppD.Rank", "OppD Rank", "OppD.1", "OppD Rk")),
                 # Non-conference SOS (useful for evaluating early-season performance)
-                "ncsos_adj_em": safe_float(get_col(row, "NCSOS AdjEM", "NCSOS", "NCSOS AdjEM.")),
-                "ncsos_adj_em_rank": safe_int(get_col(row, "NCSOS AdjEM Rank", "NCSOS.1", "NCSOS Rk")),
+                "ncsos_adj_em": safe_float(get_col(row, "NCSOS-AdjEM", "NCSOS AdjEM", "NCSOS", "NCSOS AdjEM.")),
+                "ncsos_adj_em_rank": safe_int(get_col(row, "NCSOS-AdjEM.Rank", "NCSOS AdjEM Rank", "NCSOS.1", "NCSOS Rk")),
                 "wins": wins,
                 "losses": losses,
                 "conference": get_col(row, "Conf", "Conference"),

@@ -236,15 +236,15 @@ def sample_kenpom_dataframe():
     return pd.DataFrame([
         {
             "Rk": 1, "Team": "Duke", "Conf": "ACC", "W-L": "18-2",
-            "AdjEM": 28.5, "AdjO": 118.5, "AdjO Rank": 3,
-            "AdjD": 90.0, "AdjD Rank": 2, "AdjT": 70.2, "AdjT Rank": 45,
-            "Luck": 0.02, "Luck Rank": 150, "SOS AdjEM": 12.5, "SOS AdjEM Rank": 10,
+            "AdjEM": 28.5, "AdjO": 118.5, "AdjO.Rank": 3,
+            "AdjD": 90.0, "AdjD.Rank": 2, "AdjT": 70.2, "AdjT.Rank": 45,
+            "Luck": 0.02, "Luck.Rank": 150, "SOS-AdjEM": 12.5, "SOS-AdjEM.Rank": 10,
         },
         {
             "Rk": 2, "Team": "North Carolina", "Conf": "ACC", "W-L": "17-3",
-            "AdjEM": 25.2, "AdjO": 116.8, "AdjO Rank": 8,
-            "AdjD": 91.6, "AdjD Rank": 5, "AdjT": 72.1, "AdjT Rank": 30,
-            "Luck": -0.01, "Luck Rank": 200, "SOS AdjEM": 11.8, "SOS AdjEM Rank": 12,
+            "AdjEM": 25.2, "AdjO": 116.8, "AdjO.Rank": 8,
+            "AdjD": 91.6, "AdjD.Rank": 5, "AdjT": 72.1, "AdjT.Rank": 30,
+            "Luck": -0.01, "Luck.Rank": 200, "SOS-AdjEM": 11.8, "SOS-AdjEM.Rank": 12,
         },
     ])
 

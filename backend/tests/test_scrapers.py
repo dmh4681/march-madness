@@ -20,27 +20,27 @@ def sample_kenpom_ratings_df():
     return pd.DataFrame([
         {
             "Rk": 1, "Team": "Duke", "Conf": "ACC", "W-L": "18-2",
-            "AdjEM": 28.5, "AdjO": 118.5, "AdjO Rank": 3,
-            "AdjD": 90.0, "AdjD Rank": 2, "AdjT": 70.2, "AdjT Rank": 45,
-            "Luck": 0.02, "Luck Rank": 150, "SOS AdjEM": 12.5, "SOS AdjEM Rank": 10,
-            "OppO": 108.2, "OppO Rank": 15, "OppD": 98.5, "OppD Rank": 20,
-            "NCSOS AdjEM": 8.5, "NCSOS AdjEM Rank": 25,
+            "AdjEM": 28.5, "AdjO": 118.5, "AdjO.Rank": 3,
+            "AdjD": 90.0, "AdjD.Rank": 2, "AdjT": 70.2, "AdjT.Rank": 45,
+            "Luck": 0.02, "Luck.Rank": 150, "SOS-AdjEM": 12.5, "SOS-AdjEM.Rank": 10,
+            "SOS-OppO": 108.2, "SOS-OppO.Rank": 15, "SOS-OppD": 98.5, "SOS-OppD.Rank": 20,
+            "NCSOS-AdjEM": 8.5, "NCSOS-AdjEM.Rank": 25,
         },
         {
             "Rk": 2, "Team": "North Carolina", "Conf": "ACC", "W-L": "17-3",
-            "AdjEM": 25.2, "AdjO": 116.8, "AdjO Rank": 8,
-            "AdjD": 91.6, "AdjD Rank": 5, "AdjT": 72.1, "AdjT Rank": 30,
-            "Luck": -0.01, "Luck Rank": 200, "SOS AdjEM": 11.8, "SOS AdjEM Rank": 12,
-            "OppO": 107.5, "OppO Rank": 18, "OppD": 99.2, "OppD Rank": 25,
-            "NCSOS AdjEM": 7.8, "NCSOS AdjEM Rank": 30,
+            "AdjEM": 25.2, "AdjO": 116.8, "AdjO.Rank": 8,
+            "AdjD": 91.6, "AdjD.Rank": 5, "AdjT": 72.1, "AdjT.Rank": 30,
+            "Luck": -0.01, "Luck.Rank": 200, "SOS-AdjEM": 11.8, "SOS-AdjEM.Rank": 12,
+            "SOS-OppO": 107.5, "SOS-OppO.Rank": 18, "SOS-OppD": 99.2, "SOS-OppD.Rank": 25,
+            "NCSOS-AdjEM": 7.8, "NCSOS-AdjEM.Rank": 30,
         },
         {
             "Rk": 3, "Team": "Kentucky", "Conf": "SEC", "W-L": "16-4",
-            "AdjEM": 23.8, "AdjO": 115.2, "AdjO Rank": 12,
-            "AdjD": 91.4, "AdjD Rank": 4, "AdjT": 68.5, "AdjT Rank": 80,
-            "Luck": 0.03, "Luck Rank": 120, "SOS AdjEM": 10.5, "SOS AdjEM Rank": 15,
-            "OppO": 106.8, "OppO Rank": 22, "OppD": 98.8, "OppD Rank": 22,
-            "NCSOS AdjEM": 6.5, "NCSOS AdjEM Rank": 40,
+            "AdjEM": 23.8, "AdjO": 115.2, "AdjO.Rank": 12,
+            "AdjD": 91.4, "AdjD.Rank": 4, "AdjT": 68.5, "AdjT.Rank": 80,
+            "Luck": 0.03, "Luck.Rank": 120, "SOS-AdjEM": 10.5, "SOS-AdjEM.Rank": 15,
+            "SOS-OppO": 106.8, "SOS-OppO.Rank": 22, "SOS-OppD": 98.8, "SOS-OppD.Rank": 22,
+            "NCSOS-AdjEM": 6.5, "NCSOS-AdjEM.Rank": 40,
         },
     ])
 
@@ -316,6 +316,62 @@ class TestKenpomStoreRatings:
 
         # Should still work with alternative column names
         assert result["inserted"] == 1
+
+
+class TestKenpomFullColumnSet:
+    """Test with the exact column set returned by kenpompy 0.3.5."""
+
+    @patch('backend.data_collection.kenpom_scraper.get_team_id')
+    @patch('backend.data_collection.kenpom_scraper.supabase')
+    def test_all_kenpompy_columns_parsed(self, mock_supabase, mock_get_team_id):
+        """All 22 kenpompy columns should be parsed into correct DB fields."""
+        from backend.data_collection.kenpom_scraper import store_kenpom_ratings
+
+        mock_get_team_id.return_value = "team-uuid"
+
+        mock_table = MagicMock()
+        mock_supabase.table.return_value = mock_table
+
+        mock_insert = MagicMock()
+        mock_table.insert.return_value = mock_insert
+        mock_insert.execute.return_value = MagicMock(data=[{"id": "rating-uuid"}])
+
+        # Exact columns from kenpompy 0.3.5 get_pomeroy_ratings()
+        df = pd.DataFrame([{
+            "Rk": 1, "Team": "Houston", "Conf": "B12", "W-L": "25-2",
+            "AdjEM": 32.15, "AdjO": 121.3, "AdjO.Rank": 2,
+            "AdjD": 89.2, "AdjD.Rank": 3, "AdjT": 65.8, "AdjT.Rank": 280,
+            "Luck": 0.041, "Luck.Rank": 55,
+            "SOS-AdjEM": 10.82, "SOS-AdjEM.Rank": 14,
+            "SOS-OppO": 108.5, "SOS-OppO.Rank": 20,
+            "SOS-OppD": 97.7, "SOS-OppD.Rank": 18,
+            "NCSOS-AdjEM": 5.31, "NCSOS-AdjEM.Rank": 62,
+            "Seed": 1,
+        }])
+
+        result = store_kenpom_ratings(df, 2025)
+
+        assert result["inserted"] == 1
+        assert result["errors"] == 0
+
+        # Verify the inserted data has all fields populated
+        insert_call = mock_table.insert.call_args[0][0]
+        assert insert_call["adj_offense"] == 121.3
+        assert insert_call["adj_offense_rank"] == 2
+        assert insert_call["adj_defense"] == 89.2
+        assert insert_call["adj_defense_rank"] == 3
+        assert insert_call["adj_tempo"] == 65.8
+        assert insert_call["adj_tempo_rank"] == 280
+        assert insert_call["luck"] == 0.041
+        assert insert_call["luck_rank"] == 55
+        assert insert_call["sos_adj_em"] == 10.82
+        assert insert_call["sos_adj_em_rank"] == 14
+        assert insert_call["sos_opp_offense"] == 108.5
+        assert insert_call["sos_opp_offense_rank"] == 20
+        assert insert_call["sos_opp_defense"] == 97.7
+        assert insert_call["sos_opp_defense_rank"] == 18
+        assert insert_call["ncsos_adj_em"] == 5.31
+        assert insert_call["ncsos_adj_em_rank"] == 62
 
 
 class TestKenpomFetchRatings:

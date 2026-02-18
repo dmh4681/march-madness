@@ -188,7 +188,7 @@ class TestKenpomSuccessfulStore:
         df = pd.DataFrame([{
             "Rk": 1, "Team": "Duke", "Conf": "ACC", "W-L": "20-3",
             "AdjEM": 30.5, "AdjO": 120.0, "AdjD": 89.5, "AdjT": 68.0,
-            "Luck": 0.02, "SOS AdjEM": 10.5,
+            "Luck": 0.02, "SOS-AdjEM": 10.5,
         }])
 
         tbl = MagicMock()
