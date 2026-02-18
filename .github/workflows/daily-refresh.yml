@@ -21,7 +21,7 @@ jobs:
             "${{ secrets.RAILWAY_API_URL }}/refresh" \
             -H "Content-Type: application/json" \
             -d '{"api_key": "${{ secrets.REFRESH_API_KEY }}"}' \
-            --max-time 300)
+            --max-time 600)
 
           echo "Response: $RESPONSE"
 
