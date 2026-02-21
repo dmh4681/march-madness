@@ -444,9 +444,6 @@ Most endpoints are public. Admin endpoints may require an API key via query para
     license_info={
         "name": "MIT",
     },
-    # SECURITY: Disable automatic docs in production if needed
-    # docs_url=None if os.getenv("ENVIRONMENT") == "production" else "/docs",
-    # redoc_url=None if os.getenv("ENVIRONMENT") == "production" else "/redoc",
 )
 
 # =============================================================================
@@ -1244,8 +1241,6 @@ def predict(request: Request, predict_request: PredictRequest):
             reasoning=quick["reasoning"],
         )
 
-    # Note: This case is now handled by PredictRequest model_validator
-    # If we reach here, validation already passed
 
 
 @app.get("/ai-analysis", tags=["AI Analysis"])

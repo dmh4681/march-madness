@@ -277,9 +277,7 @@ def _fetch_kenpom_ratings_uncached(season: int = 2025) -> pd.DataFrame | None:
         ratings = kp.get_pomeroy_ratings(browser, season=str(season))
 
         print(f"Fetched {len(ratings)} team ratings")
-        print(f"Columns available: {list(ratings.columns)}")
-        if len(ratings) > 0:
-            print(f"Sample row: {ratings.iloc[0].to_dict()}")
+        logger.debug(f"KenPom columns: {list(ratings.columns)}")
 
         # Always close the browser to free resources
         browser.close()
@@ -392,12 +390,7 @@ def store_kenpom_ratings(df: pd.DataFrame, season: int) -> dict:
         Dict with counts: {inserted, skipped, errors}
     """
     print(f"\n=== Storing KenPom Ratings ===")
-
-    # Debug: Print actual column names from kenpompy
-    # This helps diagnose issues when kenpompy updates change column names
-    print(f"DataFrame columns: {list(df.columns)}")
-    if len(df) > 0:
-        print(f"Sample row: {df.iloc[0].to_dict()}")
+    logger.info(f"KenPom DataFrame columns: {list(df.columns)}")
 
     inserted = 0
     skipped = 0
