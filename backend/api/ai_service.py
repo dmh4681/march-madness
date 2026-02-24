@@ -50,6 +50,7 @@ import re
 import json
 import hashlib
 import logging
+import time
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
@@ -76,9 +77,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GROK_API_KEY = os.getenv("GROK_API_KEY")
 GROK_BASE_URL = "https://api.x.ai/v1"  # Grok uses OpenAI-compatible API
 
-# Initialize clients
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-grok_client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_BASE_URL) if GROK_API_KEY else None
+# Initialize clients with timeouts (seconds)
+AI_TIMEOUT = 60  # 60s timeout for AI API calls
+claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=AI_TIMEOUT) if ANTHROPIC_API_KEY else None
+grok_client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_BASE_URL, timeout=AI_TIMEOUT) if GROK_API_KEY else None
 
 AIProvider = Literal["claude", "grok"]
 
@@ -633,13 +635,24 @@ def analyze_with_claude(context: dict) -> dict:
     prompt = build_analysis_prompt(context)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
-    response = claude_client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = claude_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            break
+        except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+            last_error = e
+            logger.warning(f"Claude API attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    else:
+        raise last_error
 
     # Parse response
     response_text = response.content[0].text
@@ -697,13 +710,25 @@ def analyze_with_grok(context: dict) -> dict:
     prompt = build_analysis_prompt(context)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
-    response = grok_client.chat.completions.create(
-        model="grok-3",
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=1024,
-    )
+    from openai import APITimeoutError, APIConnectionError
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = grok_client.chat.completions.create(
+                model="grok-3",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=1024,
+            )
+            break
+        except (APITimeoutError, APIConnectionError) as e:
+            last_error = e
+            logger.warning(f"Grok API attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+    else:
+        raise last_error
 
     response_text = response.choices[0].message.content
     tokens_used = response.usage.total_tokens if response.usage else 0
