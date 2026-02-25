@@ -37,6 +37,21 @@ export interface Database {
         Insert: Omit<BetResult, 'id' | 'created_at'>;
         Update: Partial<Omit<BetResult, 'id'>>;
       };
+      tournaments: {
+        Row: Tournament;
+        Insert: Omit<Tournament, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<Tournament, 'id'>>;
+      };
+      tournament_seeds: {
+        Row: TournamentSeed;
+        Insert: Omit<TournamentSeed, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<TournamentSeed, 'id'>>;
+      };
+      bracket_picks: {
+        Row: BracketPick;
+        Insert: Omit<BracketPick, 'id' | 'created_at' | 'updated_at'>;
+        Update: Partial<Omit<BracketPick, 'id'>>;
+      };
     };
     Views: {
       today_games: {
@@ -44,6 +59,12 @@ export interface Database {
       };
       season_performance: {
         Row: SeasonPerformance;
+      };
+      tournament_bracket: {
+        Row: BracketMatchup;
+      };
+      tournament_region_summary: {
+        Row: RegionSeedEntry;
       };
     };
   };
@@ -402,6 +423,106 @@ export interface LiveAnalysis {
   confidence?: number;
   action?: 'new_value' | 'hold' | 'fade' | 'pass';
   message?: string;
+}
+
+// Tournament Bracket Types
+export type TournamentStatus = 'upcoming' | 'bracket_set' | 'in_progress' | 'completed';
+export type TournamentRegion = 'East' | 'West' | 'South' | 'Midwest';
+export type TournamentRound =
+  | 'first_four'
+  | 'round_64'
+  | 'round_32'
+  | 'sweet_16'
+  | 'elite_8'
+  | 'final_4'
+  | 'championship';
+
+export interface Tournament {
+  id: string;
+  season: number;
+  name: string;
+  status: TournamentStatus;
+  selection_sunday_date: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  champion_team_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TournamentSeed {
+  id: string;
+  tournament_id: string;
+  team_id: string;
+  seed: number;
+  region: TournamentRegion;
+  is_play_in: boolean;
+  play_in_matchup: number | null;
+  eliminated_in_round: TournamentRound | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  teams?: {
+    name: string;
+    conference: string | null;
+    is_power_conference: boolean;
+  };
+}
+
+export interface BracketPick {
+  id: string;
+  tournament_id: string;
+  game_id: string | null;
+  round: TournamentRound;
+  region: TournamentRegion | null;
+  picked_team_id: string;
+  is_correct: boolean | null;
+  confidence_score: number | null;
+  reasoning: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// tournament_bracket view type
+export interface BracketMatchup {
+  game_id: string;
+  date: string;
+  tip_time: string | null;
+  tournament_round: TournamentRound;
+  game_status: GameStatus;
+  home_score: number | null;
+  away_score: number | null;
+  neutral_site: boolean;
+  season: number;
+  home_team: string;
+  home_conference: string | null;
+  home_seed: number | null;
+  home_region: TournamentRegion | null;
+  away_team: string;
+  away_conference: string | null;
+  away_seed: number | null;
+  away_region: TournamentRegion | null;
+  home_spread: number | null;
+  home_ml: number | null;
+  away_ml: number | null;
+  over_under: number | null;
+  picked_team_id: string | null;
+  picked_team: string | null;
+  is_correct: boolean | null;
+  pick_confidence: number | null;
+  pick_reasoning: string | null;
+}
+
+// tournament_region_summary view type
+export interface RegionSeedEntry {
+  season: number;
+  region: TournamentRegion;
+  seed: number;
+  team_name: string;
+  conference: string | null;
+  is_play_in: boolean;
+  eliminated_in_round: TournamentRound | null;
+  is_alive: boolean;
 }
 
 // Utility types

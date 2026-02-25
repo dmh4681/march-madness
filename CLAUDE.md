@@ -64,7 +64,8 @@ march-madness/
 │       ├── 20250118000000_initial_schema.sql
 │       ├── 20250118000001_today_games_view.sql
 │       ├── 20250119000000_kenpom_ratings.sql
-│       └── 20250121000000_haslametrics_ratings.sql
+│       ├── 20250121000000_haslametrics_ratings.sql
+│       └── 20260301000000_tournament_bracket.sql
 │
 ├── .github/
 │   └── workflows/
@@ -92,6 +93,12 @@ march-madness/
 | `/regenerate-predictions` | POST | Regenerate predictions only |
 | `/stats` | GET | Season performance statistics |
 | `/rankings` | GET | Current AP rankings |
+| `/tournament/{season}` | GET | Tournament metadata (creates if needed) |
+| `/tournament/bracket` | GET | Bracket matchups (filter by region/round) |
+| `/tournament/regions` | GET | Seeds grouped by region |
+| `/tournament/set-bracket` | POST | Batch populate seeds (Selection Sunday) |
+| `/tournament/pick` | POST | Make/update a bracket pick |
+| `/tournament/grade` | POST | Grade picks and update eliminations |
 
 ## Database Schema (Supabase)
 
@@ -108,6 +115,9 @@ march-madness/
 - `prediction_markets` - Polymarket/Kalshi prediction market data
 - `prediction_market_prices` - Historical price snapshots
 - `arbitrage_opportunities` - Detected edges between prediction markets and sportsbooks
+- `tournaments` - NCAA Tournament metadata by season (status, dates, champion)
+- `tournament_seeds` - 68 teams per tournament with seed/region assignments (First Four supported)
+- `bracket_picks` - Developer bracket predictions per game with confidence and grading
 
 **Views:**
 - `today_games` - Today's games with all joined data (includes AI and PM flags)
@@ -116,6 +126,8 @@ march-madness/
 - `latest_haslametrics_ratings` - Most recent Haslametrics data per team
 - `game_prediction_markets` - Prediction markets matched to games
 - `actionable_arbitrage` - Arbitrage opportunities with >=10% edge
+- `tournament_bracket` - Tournament games with seeds, spreads, and picks joined
+- `tournament_region_summary` - Seeds by region with is_alive flag
 
 ## Environment Variables
 
@@ -241,7 +253,7 @@ The AI service (`backend/api/ai_service.py`) uses Claude and Grok to analyze gam
 
 **In Progress:**
 - Performance tracking page (placeholder, needs real data)
-- March Madness bracket page (placeholder, ready for Selection Sunday)
+- March Madness bracket page (data model + API ready, frontend bracket UI next)
 
 ## Roadmap / Future Features
 

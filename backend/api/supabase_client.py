@@ -884,6 +884,212 @@ def insert_arbitrage_opportunity(opportunity_data: dict) -> dict:
 
 
 # ============================================
+# TOURNAMENT BRACKET
+# ============================================
+
+
+@timed_query("get_tournament")
+def get_tournament(season: int) -> Optional[dict]:
+    """Get tournament metadata by season."""
+    client = get_supabase()
+    result = client.table("tournaments").select("*").eq("season", season).execute()
+    return result.data[0] if result.data else None
+
+
+@timed_query("create_tournament")
+def create_tournament(season: int, **kwargs) -> dict:
+    """Create a tournament row for a given season."""
+    data = {"season": season}
+    for key in ("name", "selection_sunday_date", "start_date", "end_date", "status"):
+        if key in kwargs and kwargs[key] is not None:
+            data[key] = _sanitize_string(kwargs[key]) if isinstance(kwargs.get(key), str) else kwargs[key]
+    client = get_supabase()
+    result = client.table("tournaments").insert(data).execute()
+    return result.data[0] if result.data else {}
+
+
+@timed_query("update_tournament")
+def update_tournament(tournament_id: str, updates: dict) -> dict:
+    """Update tournament fields (status, champion, dates)."""
+    tournament_id = _validate_uuid(tournament_id, "tournament_id")
+    allowed = {"name", "status", "selection_sunday_date", "start_date", "end_date", "champion_team_id"}
+    filtered = {}
+    for k, v in updates.items():
+        if k in allowed:
+            if k == "champion_team_id" and v is not None:
+                v = _validate_uuid(v, "champion_team_id")
+            filtered[k] = v
+    client = get_supabase()
+    result = client.table("tournaments").update(filtered).eq("id", tournament_id).execute()
+    return result.data[0] if result.data else {}
+
+
+@timed_query("get_tournament_seeds")
+def get_tournament_seeds(tournament_id: str, region: Optional[str] = None) -> list[dict]:
+    """Get seeds for a tournament, optionally filtered by region."""
+    tournament_id = _validate_uuid(tournament_id, "tournament_id")
+    client = get_supabase()
+    query = client.table("tournament_seeds").select(
+        "*, teams(name, conference, is_power_conference)"
+    ).eq("tournament_id", tournament_id)
+    if region:
+        query = query.eq("region", _sanitize_string(region))
+    query = query.order("region").order("seed").order("play_in_matchup", nullsfirst=True)
+    result = query.execute()
+    return result.data or []
+
+
+@timed_query("upsert_tournament_seed")
+def upsert_tournament_seed(seed_data: dict) -> dict:
+    """Insert or update a single tournament seed."""
+    if seed_data.get("tournament_id"):
+        seed_data["tournament_id"] = _validate_uuid(seed_data["tournament_id"], "tournament_id")
+    if seed_data.get("team_id"):
+        seed_data["team_id"] = _validate_uuid(seed_data["team_id"], "team_id")
+    client = get_supabase()
+    result = client.table("tournament_seeds").upsert(
+        seed_data, on_conflict="tournament_id,team_id"
+    ).execute()
+    return result.data[0] if result.data else {}
+
+
+@timed_query("bulk_insert_seeds")
+def bulk_insert_seeds(tournament_id: str, seeds: list[dict]) -> list[dict]:
+    """Batch insert seeds for a tournament (Selection Sunday)."""
+    tournament_id = _validate_uuid(tournament_id, "tournament_id")
+    rows = []
+    for s in seeds:
+        team_id = _validate_uuid(s["team_id"], "team_id")
+        rows.append({
+            "tournament_id": tournament_id,
+            "team_id": team_id,
+            "seed": s["seed"],
+            "region": _sanitize_string(s["region"]),
+            "is_play_in": s.get("is_play_in", False),
+            "play_in_matchup": s.get("play_in_matchup"),
+        })
+    client = get_supabase()
+    result = client.table("tournament_seeds").upsert(
+        rows, on_conflict="tournament_id,team_id"
+    ).execute()
+    return result.data or []
+
+
+@timed_query("get_tournament_bracket_view")
+def get_tournament_bracket_view(
+    season: int,
+    region: Optional[str] = None,
+    tournament_round: Optional[str] = None,
+) -> list[dict]:
+    """Query the tournament_bracket view with optional filters."""
+    client = get_supabase()
+    query = client.table("tournament_bracket").select("*").eq("season", season)
+    if region:
+        query = query.or_(
+            f"home_region.eq.{_sanitize_string(region)},away_region.eq.{_sanitize_string(region)}"
+        )
+    if tournament_round:
+        query = query.eq("tournament_round", _sanitize_string(tournament_round))
+    query = query.order("date").order("tip_time", nullsfirst=True)
+    result = query.execute()
+    return result.data or []
+
+
+@timed_query("get_region_summary")
+def get_region_summary(season: int) -> list[dict]:
+    """Query the tournament_region_summary view for a season."""
+    client = get_supabase()
+    result = client.table("tournament_region_summary").select("*").eq(
+        "season", season
+    ).execute()
+    return result.data or []
+
+
+@timed_query("upsert_bracket_pick")
+def upsert_bracket_pick(pick_data: dict) -> dict:
+    """Insert or update a bracket pick for a game."""
+    if pick_data.get("tournament_id"):
+        pick_data["tournament_id"] = _validate_uuid(pick_data["tournament_id"], "tournament_id")
+    if pick_data.get("game_id"):
+        pick_data["game_id"] = _validate_uuid(pick_data["game_id"], "game_id")
+    if pick_data.get("picked_team_id"):
+        pick_data["picked_team_id"] = _validate_uuid(pick_data["picked_team_id"], "picked_team_id")
+    client = get_supabase()
+    result = client.table("bracket_picks").upsert(
+        pick_data, on_conflict="tournament_id,game_id"
+    ).execute()
+    return result.data[0] if result.data else {}
+
+
+@timed_query("grade_bracket_picks")
+def grade_bracket_picks(tournament_id: str) -> dict:
+    """Grade bracket picks against actual game results. Returns win/loss counts."""
+    tournament_id = _validate_uuid(tournament_id, "tournament_id")
+    client = get_supabase()
+
+    # Fetch all ungraded picks with their games
+    picks = client.table("bracket_picks").select(
+        "id, game_id, picked_team_id, games(home_team_id, away_team_id, home_score, away_score, status)"
+    ).eq("tournament_id", tournament_id).is_("is_correct", "null").execute()
+
+    correct = 0
+    incorrect = 0
+    for pick in (picks.data or []):
+        game = pick.get("games")
+        if not game or game.get("status") != "final":
+            continue
+        home_score = game.get("home_score", 0) or 0
+        away_score = game.get("away_score", 0) or 0
+        winner_id = game["home_team_id"] if home_score > away_score else game["away_team_id"]
+        is_correct = pick["picked_team_id"] == winner_id
+
+        client.table("bracket_picks").update(
+            {"is_correct": is_correct}
+        ).eq("id", pick["id"]).execute()
+
+        if is_correct:
+            correct += 1
+        else:
+            incorrect += 1
+
+    return {"graded": correct + incorrect, "correct": correct, "incorrect": incorrect}
+
+
+@timed_query("update_eliminated_teams")
+def update_eliminated_teams(tournament_id: str) -> int:
+    """Set eliminated_in_round for losing teams based on final game results."""
+    tournament_id = _validate_uuid(tournament_id, "tournament_id")
+    client = get_supabase()
+
+    # Get all final tournament games for this tournament's season
+    tournament = client.table("tournaments").select("season").eq("id", tournament_id).execute()
+    if not tournament.data:
+        return 0
+    season = tournament.data[0]["season"]
+
+    games = client.table("games").select(
+        "id, home_team_id, away_team_id, home_score, away_score, tournament_round"
+    ).eq("season", season).eq("is_tournament", True).eq("status", "final").execute()
+
+    updated = 0
+    for game in (games.data or []):
+        home_score = game.get("home_score", 0) or 0
+        away_score = game.get("away_score", 0) or 0
+        loser_id = game["away_team_id"] if home_score > away_score else game["home_team_id"]
+
+        result = client.table("tournament_seeds").update(
+            {"eliminated_in_round": game["tournament_round"]}
+        ).eq("tournament_id", tournament_id).eq("team_id", loser_id).is_(
+            "eliminated_in_round", "null"
+        ).execute()
+
+        if result.data:
+            updated += 1
+
+    return updated
+
+
+# ============================================
 # CACHE MANAGEMENT
 # ============================================
 

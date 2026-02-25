@@ -205,6 +205,18 @@ from .supabase_client import (
     get_team_by_name,
     normalize_team_name,
     get_supabase,
+    # Tournament bracket
+    get_tournament,
+    create_tournament,
+    update_tournament,
+    get_tournament_seeds,
+    upsert_tournament_seed,
+    bulk_insert_seeds,
+    get_tournament_bracket_view,
+    get_region_summary,
+    upsert_bracket_pick,
+    grade_bracket_picks,
+    update_eliminated_teams,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
 
@@ -386,6 +398,22 @@ Prediction market data from Polymarket and Kalshi.
 **Arbitrage Detection:**
 Compares sportsbook implied probabilities with prediction market prices.
 Actionable opportunities flagged when delta >= 10%.
+""",
+    },
+    {
+        "name": "Tournament",
+        "description": """
+NCAA Tournament bracket endpoints for March Madness.
+
+**Bracket Data Model:**
+- Tournaments: one row per season with status tracking
+- Seeds: 68 teams with region/seed assignments (First Four supported)
+- Picks: developer bracket predictions with confidence and grading
+
+**Workflow:**
+1. Create tournament for the season
+2. After Selection Sunday, POST /tournament/set-bracket with all 68 seeds
+3. As games are played, POST picks and grade them
 """,
     },
     {
@@ -3178,6 +3206,206 @@ def get_batch_analysis_status(request: Request, job_id: str = Path(..., descript
         total=job["total"],
         results=[BatchGameResult(**r) for r in job.get("results", [])],
     )
+
+
+# =============================================================================
+# Tournament Bracket Endpoints
+# =============================================================================
+
+VALID_REGIONS = {"East", "West", "South", "Midwest"}
+VALID_ROUNDS = {
+    "first_four", "round_64", "round_32", "sweet_16", "elite_8", "final_4", "championship"
+}
+
+
+class TournamentSeedInput(BaseModel):
+    """A single seed entry for the set-bracket endpoint."""
+    team_name: str = Field(..., min_length=1, max_length=100, description="Team name")
+    seed: int = Field(..., ge=1, le=16, description="Seed number (1-16)")
+    region: Literal["East", "West", "South", "Midwest"] = Field(..., description="Tournament region")
+    is_play_in: bool = Field(default=False, description="True for First Four teams")
+    play_in_matchup: Optional[int] = Field(default=None, description="1 or 2 for play-in teams")
+
+    @field_validator('team_name')
+    @classmethod
+    def validate_team_name(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9\s\-\.\'\&\(\)]+$", v):
+            raise ValueError('Team name contains invalid characters')
+        return v
+
+
+class SetBracketRequest(BaseModel):
+    """Request to populate all seeds after Selection Sunday."""
+    season: int = Field(..., ge=2000, le=2100, description="Tournament season year")
+    seeds: list[TournamentSeedInput] = Field(
+        ..., min_length=64, max_length=68, description="All tournament seeds (64-68 teams)"
+    )
+
+
+class BracketPickRequest(BaseModel):
+    """Request to make or update a bracket pick."""
+    game_id: str = Field(..., description="Game UUID")
+    picked_team_id: str = Field(..., description="Picked team UUID")
+    confidence_score: Optional[float] = Field(default=None, ge=0, le=1, description="Confidence (0-1)")
+    reasoning: Optional[str] = Field(default=None, max_length=1000, description="Pick reasoning")
+
+    @field_validator('game_id', 'picked_team_id')
+    @classmethod
+    def validate_uuids(cls, v: str) -> str:
+        if not UUID_PATTERN.match(v):
+            raise ValueError('Must be a valid UUID')
+        return v
+
+
+@app.get("/tournament/{season}", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
+    """Get tournament metadata for a season. Creates the tournament if it doesn't exist."""
+    tournament = get_tournament(season)
+    if not tournament:
+        tournament = create_tournament(season)
+    return success_response(tournament)
+
+
+@app.get("/tournament/bracket", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_bracket(
+    request: Request,
+    season: int = Query(..., ge=2000, le=2100, description="Season year"),
+    region: Optional[str] = Query(default=None, description="Filter by region"),
+    round: Optional[str] = Query(default=None, alias="round", description="Filter by round"),
+):
+    """Get bracket matchups from the tournament_bracket view."""
+    if region and region not in VALID_REGIONS:
+        raise ValidationException(
+            message="Invalid region",
+            details={"valid": list(VALID_REGIONS)}
+        )
+    if round and round not in VALID_ROUNDS:
+        raise ValidationException(
+            message="Invalid round",
+            details={"valid": list(VALID_ROUNDS)}
+        )
+    data = get_tournament_bracket_view(season, region=region, tournament_round=round)
+    return success_response(data)
+
+
+@app.get("/tournament/regions", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_regions(
+    request: Request,
+    season: int = Query(..., ge=2000, le=2100, description="Season year"),
+):
+    """Get seeds grouped by region from the tournament_region_summary view."""
+    data = get_region_summary(season)
+    # Group by region for frontend convenience
+    grouped: dict[str, list] = {}
+    for entry in data:
+        r = entry.get("region", "Unknown")
+        grouped.setdefault(r, []).append(entry)
+    return success_response({"regions": grouped, "total_teams": len(data)})
+
+
+@app.post("/tournament/set-bracket", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def set_bracket(request: Request, body: SetBracketRequest):
+    """
+    Batch populate tournament seeds after Selection Sunday.
+
+    Creates the tournament if needed, resolves team names to IDs,
+    and bulk inserts all seeds.
+    """
+    tournament = get_tournament(body.season)
+    if not tournament:
+        tournament = create_tournament(body.season)
+    tournament_id = tournament["id"]
+
+    # Resolve team names to IDs
+    seeds_to_insert = []
+    errors = []
+    for idx, seed_input in enumerate(body.seeds):
+        team = get_team_by_name(seed_input.team_name)
+        if not team:
+            errors.append({"index": idx, "team": seed_input.team_name, "error": "Team not found"})
+            continue
+        seeds_to_insert.append({
+            "team_id": team["id"],
+            "seed": seed_input.seed,
+            "region": seed_input.region,
+            "is_play_in": seed_input.is_play_in,
+            "play_in_matchup": seed_input.play_in_matchup,
+        })
+
+    if not seeds_to_insert:
+        raise ValidationException(
+            message="No valid seeds to insert",
+            details={"errors": errors}
+        )
+
+    inserted = bulk_insert_seeds(tournament_id, seeds_to_insert)
+
+    # Update tournament status
+    update_tournament(tournament_id, {"status": "bracket_set"})
+
+    return success_response({
+        "tournament_id": tournament_id,
+        "seeds_inserted": len(inserted),
+        "errors": errors,
+    })
+
+
+@app.post("/tournament/pick", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def make_bracket_pick(request: Request, body: BracketPickRequest):
+    """Make or update a bracket pick for a tournament game."""
+    # Look up the game to find the tournament
+    game = get_game_by_id(body.game_id)
+    if not game:
+        raise NotFoundException(resource="Game", identifier=body.game_id)
+    if not game.get("is_tournament"):
+        raise ValidationException(
+            message="Game is not a tournament game",
+            details={"game_id": body.game_id}
+        )
+
+    tournament = get_tournament(game["season"])
+    if not tournament:
+        raise NotFoundException(resource="Tournament", identifier=str(game["season"]))
+
+    pick_data = {
+        "tournament_id": tournament["id"],
+        "game_id": body.game_id,
+        "round": game.get("tournament_round", "unknown"),
+        "picked_team_id": body.picked_team_id,
+        "confidence_score": body.confidence_score,
+        "reasoning": body.reasoning,
+    }
+    result = upsert_bracket_pick(pick_data)
+    return success_response(result)
+
+
+@app.post("/tournament/grade", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def grade_tournament(
+    request: Request,
+    season: int = Query(..., ge=2000, le=2100, description="Season year"),
+):
+    """Grade bracket picks and update elimination status for a tournament."""
+    tournament = get_tournament(season)
+    if not tournament:
+        raise NotFoundException(resource="Tournament", identifier=str(season))
+
+    tournament_id = tournament["id"]
+    grade_result = grade_bracket_picks(tournament_id)
+    eliminated_count = update_eliminated_teams(tournament_id)
+
+    return success_response({
+        "tournament_id": tournament_id,
+        "picks_graded": grade_result["graded"],
+        "correct": grade_result["correct"],
+        "incorrect": grade_result["incorrect"],
+        "teams_eliminated": eliminated_count,
+    })
 
 
 if __name__ == "__main__":
