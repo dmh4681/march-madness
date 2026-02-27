@@ -595,6 +595,191 @@ Respond with ONLY the JSON object, no additional text."""
     return prompt
 
 
+def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
+    """
+    Build a tournament-specific prompt for bracket pick generation.
+
+    Unlike build_analysis_prompt() which recommends a BET TYPE (spread, ML, etc.),
+    this prompt asks the AI to pick a WINNER for single-elimination tournament play.
+
+    Args:
+        context: Game context dict from build_game_context()
+        matchup_metadata: Dict with tournament-specific data:
+            - home_seed, away_seed
+            - home_region, away_region
+            - tournament_round
+            - seed_history (historical win rate string)
+
+    Returns:
+        Complete prompt string for tournament pick generation
+    """
+    home_seed = matchup_metadata.get("home_seed", "?")
+    away_seed = matchup_metadata.get("away_seed", "?")
+    tournament_round = matchup_metadata.get("tournament_round", "unknown")
+    seed_history = matchup_metadata.get("seed_history", "")
+
+    round_display = tournament_round.replace("_", " ").title()
+    region = matchup_metadata.get("home_region") or matchup_metadata.get("away_region") or "N/A"
+
+    # Spread context (for reference, not the primary decision factor)
+    spread_str = ""
+    if context.get("spread") is not None:
+        spread_val = context["spread"]
+        if spread_val < 0:
+            spread_str = f"{context['home_team']} -{abs(spread_val)}"
+        else:
+            spread_str = f"{context['away_team']} -{abs(spread_val)}"
+
+    # KenPom section (same format as build_analysis_prompt)
+    kenpom_section = ""
+    home_kp = context.get("home_kenpom")
+    away_kp = context.get("away_kenpom")
+
+    if home_kp or away_kp:
+        kenpom_section = "\n## KENPOM ADVANCED ANALYTICS\n"
+
+        if home_kp:
+            kenpom_section += f"""
+**{context['home_team']}** (KenPom #{home_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {home_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {home_kp.get('adj_offense', 'N/A')} (#{home_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {home_kp.get('adj_defense', 'N/A')} (#{home_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {home_kp.get('adj_tempo', 'N/A')} (#{home_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {home_kp.get('sos_adj_em', 'N/A')} (#{home_kp.get('sos_adj_em_rank', 'N/A')})
+- Luck: {home_kp.get('luck', 'N/A')} (#{home_kp.get('luck_rank', 'N/A')})
+- Record: {home_kp.get('wins', 0)}-{home_kp.get('losses', 0)}
+"""
+
+        if away_kp:
+            kenpom_section += f"""
+**{context['away_team']}** (KenPom #{away_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {away_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {away_kp.get('adj_offense', 'N/A')} (#{away_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {away_kp.get('adj_defense', 'N/A')} (#{away_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {away_kp.get('adj_tempo', 'N/A')} (#{away_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {away_kp.get('sos_adj_em', 'N/A')} (#{away_kp.get('sos_adj_em_rank', 'N/A')})
+- Luck: {away_kp.get('luck', 'N/A')} (#{away_kp.get('luck_rank', 'N/A')})
+- Record: {away_kp.get('wins', 0)}-{away_kp.get('losses', 0)}
+"""
+
+    # Haslametrics section (same format as build_analysis_prompt)
+    haslametrics_section = ""
+    home_hasla = context.get("home_haslametrics")
+    away_hasla = context.get("away_haslametrics")
+
+    if home_hasla or away_hasla:
+        haslametrics_section = "\n## HASLAMETRICS ANALYTICS (All-Play Methodology)\n"
+
+        if home_hasla:
+            haslametrics_section += f"""
+**{context['home_team']}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
+- Offensive Efficiency: {home_hasla.get('offensive_efficiency', 'N/A')}
+- Defensive Efficiency: {home_hasla.get('defensive_efficiency', 'N/A')}
+- All-Play %: {home_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
+- Momentum: {home_hasla.get('momentum_overall', 'N/A')} (O: {home_hasla.get('momentum_offense', 'N/A')}, D: {home_hasla.get('momentum_defense', 'N/A')})
+- Pace: {home_hasla.get('pace', 'N/A')}
+- SOS: {home_hasla.get('sos', 'N/A')} (#{home_hasla.get('sos_rank', 'N/A')})
+- Last 5: {home_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {home_hasla.get('quad_1_record', 'N/A')}, Q2: {home_hasla.get('quad_2_record', 'N/A')}
+"""
+
+        if away_hasla:
+            haslametrics_section += f"""
+**{context['away_team']}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
+- Offensive Efficiency: {away_hasla.get('offensive_efficiency', 'N/A')}
+- Defensive Efficiency: {away_hasla.get('defensive_efficiency', 'N/A')}
+- All-Play %: {away_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
+- Momentum: {away_hasla.get('momentum_overall', 'N/A')} (O: {away_hasla.get('momentum_offense', 'N/A')}, D: {away_hasla.get('momentum_defense', 'N/A')})
+- Pace: {away_hasla.get('pace', 'N/A')}
+- SOS: {away_hasla.get('sos', 'N/A')} (#{away_hasla.get('sos_rank', 'N/A')})
+- Last 5: {away_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
+"""
+
+    # Dynamic analysis instructions based on available data
+    has_kenpom = home_kp or away_kp
+    has_haslametrics = home_hasla or away_hasla
+
+    if has_kenpom and has_haslametrics:
+        analysis_points = """1. Cross-validate KenPom AdjEM vs Haslametrics efficiency to gauge true team quality
+2. Momentum indicators — which team is trending up/down entering the tournament?
+3. All-Play % comparison as baseline win probability
+4. Tempo matchup — can the underdog control pace to keep it close?
+5. Quadrant records for quality-of-wins context (Q1 wins = tournament-caliber opponents)
+6. Luck factor (KenPom) — high-luck teams may regress in single-elimination
+7. Recent form (Last 5) vs season-long metrics
+8. Seed matchup historical precedent as base rate"""
+    elif has_kenpom:
+        analysis_points = """1. KenPom efficiency differentials (AdjO vs opponent AdjD matchups)
+2. Tempo implications — can the underdog dictate pace?
+3. Luck factor — high-luck teams often regress in March
+4. Strength of schedule context (inflated vs battle-tested records)
+5. Seed matchup historical precedent as base rate
+6. Estimated point differential from AdjEM difference"""
+    elif has_haslametrics:
+        analysis_points = """1. Haslametrics efficiency comparison and All-Play % gap
+2. Momentum indicators — which team is peaking at the right time?
+3. Recent form (Last 5) for current team quality
+4. Quadrant records — proven ability to beat good teams
+5. Seed matchup historical precedent as base rate"""
+    else:
+        analysis_points = """1. Seed matchup historical precedent as base rate
+2. Conference strength and quality of competition
+3. Spread as market-implied probability (if available)
+4. Tournament experience and coaching pedigree
+5. Style matchup and upset potential"""
+
+    prompt = f"""You are an expert NCAA Tournament bracket analyst. Your job is to pick the WINNER of this single-elimination tournament game. This is NOT a betting recommendation — you are predicting which team advances.
+
+## MATCHUP — {round_display}
+**#{away_seed} {context['away_team']}** vs **#{home_seed} {context['home_team']}**
+Region: {region}
+Date: {context['date']}
+Venue: {context['venue'] or 'TBD'} (Neutral Site — no home court advantage)
+
+## SEED MATCHUP HISTORY
+{seed_history}
+
+## BETTING LINES (market context)
+Spread: {spread_str or 'Not available'}
+Total: O/U {context.get('total') or 'N/A'}
+{kenpom_section}{haslametrics_section}
+## TOURNAMENT-SPECIFIC ANALYSIS
+
+Consider these factors:
+{analysis_points}
+
+Additional tournament-specific factors:
+- Single elimination magnifies variance — depth and bench scoring matter more
+- Three-point shooting variance causes upsets (hot/cold shooting nights)
+- Free throw shooting is critical in close tournament games
+- Neutral site removes home court — focus on true talent gap
+- Coaching experience in the tournament (preparation, adjustments)
+
+## REQUIRED OUTPUT FORMAT
+
+Respond in JSON format with exactly these fields:
+{{
+    "picked_team": "home" | "away",
+    "confidence_score": <float 0.0-1.0>,
+    "key_factors": [<list of 3-5 key factors as strings>],
+    "reasoning": "<2-3 sentence explanation of why this team wins>"
+}}
+
+Important guidelines:
+- "picked_team" MUST be exactly "home" or "away" (home = {context['home_team']}, away = {context['away_team']})
+- confidence_score: 0.5 = pure coin flip, 0.7 = moderate, 0.85+ = very high
+- For 1v16 and 2v15: very high confidence for the favorite is appropriate
+- For 5v12, 6v11, 7v10: carefully evaluate upset potential
+- For 8v9: nearly a coin flip — analyze deeply before picking
+- When KenPom and Haslametrics disagree, lower your confidence
+- Factor in variance: single elimination rewards consistency and defense
+
+Respond with ONLY the JSON object, no additional text."""
+
+    return prompt
+
+
 def analyze_with_claude(context: dict) -> dict:
     """
     Run game analysis using Anthropic's Claude API.

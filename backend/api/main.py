@@ -3257,6 +3257,15 @@ class BracketPickRequest(BaseModel):
         return v
 
 
+class GeneratePicksRequest(BaseModel):
+    """Request to generate AI bracket picks for tournament games."""
+    season: int = Field(..., ge=2000, le=2100, description="Tournament season year")
+    region: Optional[str] = Field(default=None, description="Filter by region")
+    round: Optional[str] = Field(default=None, description="Filter by round")
+    provider: Literal["claude", "grok"] = Field(default="claude", description="AI provider")
+    force: bool = Field(default=False, description="Overwrite existing picks")
+
+
 @app.get("/tournament/{season}", tags=["Tournament"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
@@ -3405,6 +3414,87 @@ def grade_tournament(
         "correct": grade_result["correct"],
         "incorrect": grade_result["incorrect"],
         "teams_eliminated": eliminated_count,
+    })
+
+
+@app.post("/tournament/generate-picks", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def generate_tournament_picks(
+    request: Request,
+    body: GeneratePicksRequest,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Generate AI bracket picks for tournament games.
+
+    Runs in the background. Returns a job ID for polling progress via
+    GET /api/v1/batch-analyze/{job_id}.
+    """
+    if body.region and body.region not in VALID_REGIONS:
+        raise ValidationException(
+            message="Invalid region",
+            details={"valid": list(VALID_REGIONS)}
+        )
+    if body.round and body.round not in VALID_ROUNDS:
+        raise ValidationException(
+            message="Invalid round",
+            details={"valid": list(VALID_ROUNDS)}
+        )
+
+    tournament = get_tournament(body.season)
+    if not tournament:
+        raise NotFoundException(resource="Tournament", identifier=str(body.season))
+
+    job_id = str(uuid_mod.uuid4())
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "season": body.season,
+        "provider": body.provider,
+        "total": 0,
+        "completed": 0,
+        "failed": 0,
+        "results": None,
+        "created_at": datetime.now(EASTERN_TZ).isoformat(),
+    }
+
+    with _batch_jobs_lock:
+        _batch_analysis_jobs[job_id] = job
+        _cleanup_batch_jobs()
+
+    def _run_pick_generation():
+        from backend.data_collection.bracket_pick_generator import generate_bracket_picks
+
+        with _batch_jobs_lock:
+            j = _batch_analysis_jobs.get(job_id)
+            if j:
+                j["status"] = "processing"
+
+        results = generate_bracket_picks(
+            season=body.season,
+            region=body.region,
+            tournament_round=body.round,
+            provider=body.provider,
+            force_regenerate=body.force,
+        )
+
+        with _batch_jobs_lock:
+            j = _batch_analysis_jobs.get(job_id)
+            if j:
+                j["status"] = "completed"
+                j["total"] = results.get("total_games", 0)
+                j["completed"] = results.get("picks_generated", 0)
+                j["failed"] = results.get("errors", 0)
+                j["results"] = results
+                j["completed_at"] = datetime.now(EASTERN_TZ).isoformat()
+
+    background_tasks.add_task(_run_pick_generation)
+
+    return success_response({
+        "job_id": job_id,
+        "status": "queued",
+        "poll_url": f"/api/v1/batch-analyze/{job_id}",
+        "message": f"Generating {body.provider} picks for {body.season} tournament",
     })
 
 
