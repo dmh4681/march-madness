@@ -742,7 +742,7 @@ def update_game_results() -> dict:
         print("No games need score updates")
         return {"games_scored": 0}
 
-    # Would fetch actual scores from CBBpy or ESPN
+    # Score updates handled by ESPN sync pipeline
     # For now, just report what needs updating
     print(f"Found {len(result.data)} games needing scores")
 

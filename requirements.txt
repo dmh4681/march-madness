@@ -14,7 +14,6 @@ httpx>=0.26.0  # Async HTTP client for prediction market APIs
 cryptography>=42.0.0
 
 # NCAA Data
-cbbpy>=2.1.0
 kenpompy>=0.3.5  # KenPom scraper (requires subscription)
 selenium>=4.15.0  # Browser automation for kenpompy
 
