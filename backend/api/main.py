@@ -3265,6 +3265,20 @@ class GeneratePicksRequest(BaseModel):
     provider: Literal["claude", "grok"] = Field(default="claude", description="AI provider")
     force: bool = Field(default=False, description="Overwrite existing picks")
 
+    @field_validator('region')
+    @classmethod
+    def validate_region(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_REGIONS:
+            raise ValueError(f'Invalid region. Must be one of: {", ".join(sorted(VALID_REGIONS))}')
+        return v
+
+    @field_validator('round')
+    @classmethod
+    def validate_round(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_ROUNDS:
+            raise ValueError(f'Invalid round. Must be one of: {", ".join(sorted(VALID_ROUNDS))}')
+        return v
+
 
 @app.get("/tournament/{season}", tags=["Tournament"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)

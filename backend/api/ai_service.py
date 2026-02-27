@@ -146,6 +146,25 @@ def _sanitize_error_message(error_msg: str) -> str:
     return sanitized
 
 
+def _sanitize_prompt_value(value: str, max_length: int = 100) -> str:
+    """
+    Sanitize a value before interpolating it into an AI prompt.
+
+    Strips characters that could be used for prompt injection (markdown
+    headers, system-role markers, etc.) and enforces a length limit.
+    """
+    if not value:
+        return "Unknown"
+    sanitized = value[:max_length]
+    # Remove null bytes
+    sanitized = sanitized.replace('\x00', '')
+    # Strip markdown/prompt-injection patterns: #, ```, ---, >>
+    sanitized = re.sub(r'[#`>]', '', sanitized)
+    # Collapse whitespace
+    sanitized = re.sub(r'\s+', ' ', sanitized).strip()
+    return sanitized or "Unknown"
+
+
 def _extract_json_from_response(response_text: str) -> dict:
     """
     Extract JSON from AI response text, handling nested braces.
@@ -342,17 +361,21 @@ def build_analysis_prompt(context: dict) -> str:
     home_rank_str = f"#{context['home_rank']}" if context["home_rank"] else "Unranked"
     away_rank_str = f"#{context['away_rank']}" if context["away_rank"] else "Unranked"
 
+    # Sanitize team names before prompt interpolation to prevent injection
+    home_team = _sanitize_prompt_value(context.get("home_team", "Unknown"))
+    away_team = _sanitize_prompt_value(context.get("away_team", "Unknown"))
+
     spread_str = ""
     if context["spread"] is not None:
         spread_val = context["spread"]
         if spread_val < 0:
-            spread_str = f"{context['home_team']} -{abs(spread_val)}"
+            spread_str = f"{home_team} -{abs(spread_val)}"
         else:
-            spread_str = f"{context['away_team']} -{abs(spread_val)}"
+            spread_str = f"{away_team} -{abs(spread_val)}"
 
     ml_str = ""
     if context["home_ml"] and context["away_ml"]:
-        ml_str = f"ML: {context['home_team']} {context['home_ml']:+d} / {context['away_team']} {context['away_ml']:+d}"
+        ml_str = f"ML: {home_team} {context['home_ml']:+d} / {away_team} {context['away_ml']:+d}"
 
     # ==========================================================================
     # KenPom Section: Advanced efficiency-based analytics
@@ -375,7 +398,7 @@ def build_analysis_prompt(context: dict) -> str:
 
         if home_kp:
             kenpom_section += f"""
-**{context['home_team']}** (KenPom #{home_kp.get('rank', 'N/A')})
+**{home_team}** (KenPom #{home_kp.get('rank', 'N/A')})
 - Adj. Efficiency Margin: {home_kp.get('adj_efficiency_margin', 'N/A')}
 - Adj. Offense: {home_kp.get('adj_offense', 'N/A')} (#{home_kp.get('adj_offense_rank', 'N/A')})
 - Adj. Defense: {home_kp.get('adj_defense', 'N/A')} (#{home_kp.get('adj_defense_rank', 'N/A')})
@@ -387,7 +410,7 @@ def build_analysis_prompt(context: dict) -> str:
 
         if away_kp:
             kenpom_section += f"""
-**{context['away_team']}** (KenPom #{away_kp.get('rank', 'N/A')})
+**{away_team}** (KenPom #{away_kp.get('rank', 'N/A')})
 - Adj. Efficiency Margin: {away_kp.get('adj_efficiency_margin', 'N/A')}
 - Adj. Offense: {away_kp.get('adj_offense', 'N/A')} (#{away_kp.get('adj_offense_rank', 'N/A')})
 - Adj. Defense: {away_kp.get('adj_defense', 'N/A')} (#{away_kp.get('adj_defense_rank', 'N/A')})
@@ -421,7 +444,7 @@ def build_analysis_prompt(context: dict) -> str:
 
         if home_hasla:
             haslametrics_section += f"""
-**{context['home_team']}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
+**{home_team}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
 - Offensive Efficiency: {home_hasla.get('offensive_efficiency', 'N/A')}
 - Defensive Efficiency: {home_hasla.get('defensive_efficiency', 'N/A')}
 - All-Play %: {home_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
@@ -434,7 +457,7 @@ def build_analysis_prompt(context: dict) -> str:
 
         if away_hasla:
             haslametrics_section += f"""
-**{context['away_team']}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
+**{away_team}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
 - Offensive Efficiency: {away_hasla.get('offensive_efficiency', 'N/A')}
 - Defensive Efficiency: {away_hasla.get('defensive_efficiency', 'N/A')}
 - All-Play %: {away_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
@@ -548,7 +571,7 @@ def build_analysis_prompt(context: dict) -> str:
     prompt = f"""You are an expert college basketball betting analyst with deep knowledge of advanced analytics. Analyze this matchup and provide betting recommendations.
 
 ## MATCHUP
-**{context['away_team']}** ({away_rank_str}) @ **{context['home_team']}** ({home_rank_str})
+**{away_team}** ({away_rank_str}) @ **{home_team}** ({home_rank_str})
 Date: {context['date']}
 Venue: {context['venue'] or 'TBD'}
 {'Neutral Site' if context['neutral_site'] else ''}
@@ -613,22 +636,34 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
     Returns:
         Complete prompt string for tournament pick generation
     """
+    # Extract seed numbers and round for display in the prompt header.
+    # Seeds provide the AI with base-rate priors (e.g. 1-seeds win 99.4%).
     home_seed = matchup_metadata.get("home_seed", "?")
     away_seed = matchup_metadata.get("away_seed", "?")
     tournament_round = matchup_metadata.get("tournament_round", "unknown")
+    # Seed history is a pre-formatted string from SEED_MATCHUP_HISTORY constants
+    # giving the AI historical win rates for this seed pairing (e.g. "1v16: 99.4%").
     seed_history = matchup_metadata.get("seed_history", "")
 
+    # Convert round identifiers (e.g. "sweet_16") to display format ("Sweet 16")
     round_display = tournament_round.replace("_", " ").title()
+    # Use either team's region — for non-Final Four games both should match
     region = matchup_metadata.get("home_region") or matchup_metadata.get("away_region") or "N/A"
+
+    # Sanitize team names before prompt interpolation to prevent injection.
+    # Strips markdown headers (#), backticks, and angle brackets (>) that could
+    # alter prompt structure if a team name contained adversarial content.
+    home_team = _sanitize_prompt_value(context.get("home_team", "Unknown"))
+    away_team = _sanitize_prompt_value(context.get("away_team", "Unknown"))
 
     # Spread context (for reference, not the primary decision factor)
     spread_str = ""
     if context.get("spread") is not None:
         spread_val = context["spread"]
         if spread_val < 0:
-            spread_str = f"{context['home_team']} -{abs(spread_val)}"
+            spread_str = f"{home_team} -{abs(spread_val)}"
         else:
-            spread_str = f"{context['away_team']} -{abs(spread_val)}"
+            spread_str = f"{away_team} -{abs(spread_val)}"
 
     # KenPom section (same format as build_analysis_prompt)
     kenpom_section = ""
@@ -640,7 +675,7 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
 
         if home_kp:
             kenpom_section += f"""
-**{context['home_team']}** (KenPom #{home_kp.get('rank', 'N/A')})
+**{home_team}** (KenPom #{home_kp.get('rank', 'N/A')})
 - Adj. Efficiency Margin: {home_kp.get('adj_efficiency_margin', 'N/A')}
 - Adj. Offense: {home_kp.get('adj_offense', 'N/A')} (#{home_kp.get('adj_offense_rank', 'N/A')})
 - Adj. Defense: {home_kp.get('adj_defense', 'N/A')} (#{home_kp.get('adj_defense_rank', 'N/A')})
@@ -652,7 +687,7 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
 
         if away_kp:
             kenpom_section += f"""
-**{context['away_team']}** (KenPom #{away_kp.get('rank', 'N/A')})
+**{away_team}** (KenPom #{away_kp.get('rank', 'N/A')})
 - Adj. Efficiency Margin: {away_kp.get('adj_efficiency_margin', 'N/A')}
 - Adj. Offense: {away_kp.get('adj_offense', 'N/A')} (#{away_kp.get('adj_offense_rank', 'N/A')})
 - Adj. Defense: {away_kp.get('adj_defense', 'N/A')} (#{away_kp.get('adj_defense_rank', 'N/A')})
@@ -672,7 +707,7 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
 
         if home_hasla:
             haslametrics_section += f"""
-**{context['home_team']}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
+**{home_team}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
 - Offensive Efficiency: {home_hasla.get('offensive_efficiency', 'N/A')}
 - Defensive Efficiency: {home_hasla.get('defensive_efficiency', 'N/A')}
 - All-Play %: {home_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
@@ -685,7 +720,7 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
 
         if away_hasla:
             haslametrics_section += f"""
-**{context['away_team']}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
+**{away_team}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
 - Offensive Efficiency: {away_hasla.get('offensive_efficiency', 'N/A')}
 - Defensive Efficiency: {away_hasla.get('defensive_efficiency', 'N/A')}
 - All-Play %: {away_hasla.get('all_play_pct', 'N/A')} (probability of beating average D1 team)
@@ -696,11 +731,22 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
 - Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
 """
 
-    # Dynamic analysis instructions based on available data
+    # Dynamic analysis instructions based on available data.
+    # The AI receives different analytical frameworks depending on what data sources
+    # are available. This prevents hallucination about missing data and focuses the
+    # AI on the most relevant factors for each scenario.
+    #
+    # Hierarchy (best to worst):
+    #   1. Both KenPom + Haslametrics → cross-validation, highest confidence
+    #   2. KenPom only → efficiency-focused, can estimate point differential
+    #   3. Haslametrics only → momentum + All-Play % focused
+    #   4. Neither → basic seed/spread/coaching analysis
     has_kenpom = home_kp or away_kp
     has_haslametrics = home_hasla or away_hasla
 
     if has_kenpom and has_haslametrics:
+        # Best case: two independent data sources let the AI cross-validate.
+        # When they agree, confidence rises; when they disagree, it should drop.
         analysis_points = """1. Cross-validate KenPom AdjEM vs Haslametrics efficiency to gauge true team quality
 2. Momentum indicators — which team is trending up/down entering the tournament?
 3. All-Play % comparison as baseline win probability
@@ -732,7 +778,7 @@ def build_tournament_pick_prompt(context: dict, matchup_metadata: dict) -> str:
     prompt = f"""You are an expert NCAA Tournament bracket analyst. Your job is to pick the WINNER of this single-elimination tournament game. This is NOT a betting recommendation — you are predicting which team advances.
 
 ## MATCHUP — {round_display}
-**#{away_seed} {context['away_team']}** vs **#{home_seed} {context['home_team']}**
+**#{away_seed} {away_team}** vs **#{home_seed} {home_team}**
 Region: {region}
 Date: {context['date']}
 Venue: {context['venue'] or 'TBD'} (Neutral Site — no home court advantage)
@@ -767,10 +813,10 @@ Respond in JSON format with exactly these fields:
 }}
 
 Important guidelines:
-- "picked_team" MUST be exactly "home" or "away" (home = {context['home_team']}, away = {context['away_team']})
+- "picked_team" MUST be exactly "home" or "away" (home = {home_team}, away = {away_team})
 - confidence_score: 0.5 = pure coin flip, 0.7 = moderate, 0.85+ = very high
-- For 1v16 and 2v15: very high confidence for the favorite is appropriate
-- For 5v12, 6v11, 7v10: carefully evaluate upset potential
+- For 1v16 and 2v15: very high confidence for the favorite is appropriate (historical ~99%)
+- For 5v12, 6v11, 7v10: carefully evaluate upset potential (~30-40% upset rate historically)
 - For 8v9: nearly a coin flip — analyze deeply before picking
 - When KenPom and Haslametrics disagree, lower your confidence
 - Factor in variance: single elimination rewards consistency and defense

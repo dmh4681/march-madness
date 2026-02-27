@@ -217,7 +217,10 @@ def _generate_single_pick(
     key_factors = analysis.get("key_factors", [])
     reasoning = analysis.get("reasoning", "")
 
-    # 6. Map "home"/"away" to team_id
+    # 6. Map "home"/"away" to team_id.
+    # The prompt instructs the AI to return "home" or "away" which we map to
+    # team_id from the games table. This is more reliable than returning a team
+    # name, which would require fuzzy matching (e.g. "UConn" vs "Connecticut").
     full_game = get_game_by_id(game_id)
     if not full_game:
         raise ValueError(f"Game {game_id} not found in database")
@@ -232,7 +235,8 @@ def _generate_single_pick(
         picked_team_id = full_game["away_team_id"]
         picked_team_name = context.get("away_team", "away")
     else:
-        # Fallback: try to match by team name
+        # Fallback: AI returned a team name instead of "home"/"away".
+        # Try substring matching as first recovery strategy.
         picked_name = analysis.get("picked_team", "")
         home_name = context.get("home_team", "")
         away_name = context.get("away_team", "")
@@ -246,7 +250,8 @@ def _generate_single_pick(
             picked_team_name = away_name
             picked_side = "away"
         else:
-            # Last resort: pick the higher seed (lower number)
+            # Last resort: neither "home"/"away" nor name match worked.
+            # Default to the higher seed (lower number = better seed).
             home_seed = game.get("home_seed") or 99
             away_seed = game.get("away_seed") or 99
             if home_seed <= away_seed:
@@ -268,7 +273,9 @@ def _generate_single_pick(
         factors_str = "; ".join(key_factors[:5])
         full_reasoning = f"{reasoning} | Key factors: {factors_str}"
 
-    # 8. Upsert the bracket pick
+    # 8. Upsert the bracket pick.
+    # Confidence is clamped to [0, 1] and reasoning truncated to 1000 chars
+    # to match the bracket_picks table constraints.
     pick_data = {
         "tournament_id": tournament_id,
         "game_id": game_id,

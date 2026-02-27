@@ -276,6 +276,27 @@ def _sanitize_string(value: str, max_length: int = 255, field_name: str = "value
     return sanitized
 
 
+# Tournament whitelist constants (must match main.py)
+_VALID_REGIONS = {"East", "West", "South", "Midwest"}
+_VALID_ROUNDS = {
+    "first_four", "round_64", "round_32", "sweet_16", "elite_8", "final_4", "championship"
+}
+
+
+def _validate_region(region: str) -> str:
+    """Validate region against allowed values."""
+    if region not in _VALID_REGIONS:
+        raise ValueError(f"Invalid region: {region}")
+    return region
+
+
+def _validate_round(tournament_round: str) -> str:
+    """Validate tournament round against allowed values."""
+    if tournament_round not in _VALID_ROUNDS:
+        raise ValueError(f"Invalid round: {tournament_round}")
+    return tournament_round
+
+
 # ============================================
 # TEAMS
 # ============================================
@@ -933,6 +954,7 @@ def get_tournament_seeds(tournament_id: str, region: Optional[str] = None) -> li
         "*, teams(name, conference, is_power_conference)"
     ).eq("tournament_id", tournament_id)
     if region:
+        _validate_region(region)
         query = query.eq("region", _sanitize_string(region))
     query = query.order("region").order("seed").order("play_in_matchup", nullsfirst=True)
     result = query.execute()
@@ -985,10 +1007,12 @@ def get_tournament_bracket_view(
     client = get_supabase()
     query = client.table("tournament_bracket").select("*").eq("season", season)
     if region:
+        _validate_region(region)
         query = query.or_(
             f"home_region.eq.{_sanitize_string(region)},away_region.eq.{_sanitize_string(region)}"
         )
     if tournament_round:
+        _validate_round(tournament_round)
         query = query.eq("tournament_round", _sanitize_string(tournament_round))
     query = query.order("date").order("tip_time", nullsfirst=True)
     result = query.execute()

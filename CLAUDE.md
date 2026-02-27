@@ -99,6 +99,7 @@ march-madness/
 | `/tournament/set-bracket` | POST | Batch populate seeds (Selection Sunday) |
 | `/tournament/pick` | POST | Make/update a bracket pick |
 | `/tournament/grade` | POST | Grade picks and update eliminations |
+| `/tournament/generate-picks` | POST | AI bracket pick generation (background job) |
 
 ## Database Schema (Supabase)
 
@@ -362,7 +363,77 @@ The codebase includes security hardening:
 - Parameterized queries via Supabase SDK
 - Service key kept server-side only
 
+### AI Prompt Security (`ai_service.py`)
+- Team names sanitized via `_sanitize_prompt_value()` before prompt interpolation
+- Strips markdown injection characters (`#`, backticks, `>`)
+- Enforces length limits and collapses whitespace
+- Error messages redacted via `_sanitize_error_message()` to prevent API key leakage
+
 ### General
 - No secrets in client-side code
 - HTTPS enforced on all endpoints
 - Logging avoids leaking sensitive data
+
+## Tournament Bracket API
+
+### Data Model
+
+**`tournaments`** — One row per season.
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID | Primary key |
+| `season` | int | Year (e.g. 2025) |
+| `status` | text | `upcoming`, `bracket_set`, `in_progress`, `completed` |
+| `champion_team_id` | UUID | FK to teams (set after tournament ends) |
+
+**`tournament_seeds`** — 64-68 rows per tournament.
+| Column | Type | Description |
+|--------|------|-------------|
+| `tournament_id` | UUID | FK to tournaments |
+| `team_id` | UUID | FK to teams |
+| `seed` | int | 1-16 |
+| `region` | text | East, West, South, Midwest |
+| `is_play_in` | bool | True for First Four teams |
+| `play_in_matchup` | int | 1 or 2 (for play-in pairing) |
+| `is_alive` | bool | Eliminated flag (updated by grading) |
+
+**`bracket_picks`** — One pick per tournament game.
+| Column | Type | Description |
+|--------|------|-------------|
+| `tournament_id` | UUID | FK to tournaments |
+| `game_id` | UUID | FK to games |
+| `round` | text | Tournament round identifier |
+| `picked_team_id` | UUID | FK to teams (the predicted winner) |
+| `confidence_score` | float | 0.0-1.0 AI confidence |
+| `reasoning` | text | AI explanation for the pick |
+| `is_correct` | bool | Graded result (null until graded) |
+
+### Endpoint Details
+
+**`POST /tournament/set-bracket`** — Selection Sunday seeding.
+- Body: `{ season: int, seeds: [{ team_name, seed, region, is_play_in?, play_in_matchup? }] }`
+- Requires 64-68 seeds. Team names resolved to IDs via `teams` table.
+- Validates: team name regex, seed 1-16, region enum, season 2000-2100.
+
+**`POST /tournament/pick`** — Manual bracket pick.
+- Body: `{ game_id: UUID, picked_team_id: UUID, confidence_score?: float, reasoning?: str }`
+- Validates game is a tournament game. Upserts into `bracket_picks`.
+
+**`POST /tournament/generate-picks`** — AI-powered bracket filling.
+- Body: `{ season: int, region?: str, round?: str, provider?: "claude"|"grok", force?: bool }`
+- Runs as background job. Returns `job_id` for polling via `GET /api/v1/batch-analyze/{job_id}`.
+- Validates region/round against whitelists at both Pydantic and endpoint level.
+- Uses `build_tournament_pick_prompt()` with KenPom/Haslametrics data and seed matchup history.
+
+**`POST /tournament/grade`** — Grade picks after games complete.
+- Query: `season=int`
+- Updates `is_correct` on `bracket_picks` and `is_alive` on `tournament_seeds`.
+
+### Input Validation
+
+All bracket endpoints enforce:
+- **Region whitelist**: East, West, South, Midwest (validated in Pydantic models and supabase_client)
+- **Round whitelist**: first_four, round_64, round_32, sweet_16, elite_8, final_4, championship
+- **UUID format**: Regex-validated on all ID fields
+- **Team name regex**: `^[a-zA-Z0-9\s\-\.\'\&\(\)]+$`
+- **Prompt sanitization**: Team names stripped of `#`, backticks, `>` before AI prompt interpolation
