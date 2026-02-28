@@ -62,6 +62,19 @@ interface BracketViewProps {
   correctPct: number | null;
 }
 
+function StaleDataBanner() {
+  return (
+    <div className="mb-4 px-3 py-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg flex items-center gap-2 text-sm">
+      <svg className="w-4 h-4 text-yellow-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+      <span className="text-yellow-300">
+        Bracket data may be stale. Refresh the page for the latest results.
+      </span>
+    </div>
+  );
+}
+
 // ============================================
 // MatchupRow
 // ============================================
@@ -346,6 +359,9 @@ export function BracketView({
 
   const isBracketSet = tournament && tournament.status !== 'upcoming';
 
+  // Detect potentially stale data: tournament in_progress but no matchup data loaded
+  const isStale = isBracketSet && tournament.status === 'in_progress' && matchups.length === 0;
+
   // ---- Pre-selection empty state ----
   if (!isBracketSet) {
     return (
@@ -436,6 +452,8 @@ export function BracketView({
   // ---- Post-selection bracket view ----
   return (
     <>
+      {isStale && <StaleDataBanner />}
+
       {/* Region filter tabs */}
       <div className="mb-4 -mx-3 px-3 sm:mx-0 sm:px-0">
         <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">

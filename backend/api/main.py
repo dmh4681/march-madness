@@ -3343,6 +3343,33 @@ def set_bracket(request: Request, body: SetBracketRequest):
         tournament = create_tournament(body.season)
     tournament_id = tournament["id"]
 
+    # Validate no duplicate team names
+    team_names_lower = [s.team_name.strip().lower() for s in body.seeds]
+    seen_teams = set()
+    duplicate_teams = set()
+    for name in team_names_lower:
+        if name in seen_teams:
+            duplicate_teams.add(name)
+        seen_teams.add(name)
+    if duplicate_teams:
+        raise ValidationException(
+            message="Duplicate teams in bracket",
+            details={"duplicate_teams": sorted(duplicate_teams)},
+        )
+
+    # Validate per-seed uniqueness within each region (skip play-in teams sharing a seed)
+    region_seed_map: dict[tuple[str, int], list[str]] = {}
+    for s in body.seeds:
+        if not s.is_play_in:
+            key = (s.region, s.seed)
+            region_seed_map.setdefault(key, []).append(s.team_name)
+    seed_dupes = {f"{k[0]} #{k[1]}": v for k, v in region_seed_map.items() if len(v) > 1}
+    if seed_dupes:
+        raise ValidationException(
+            message="Duplicate seed numbers in same region",
+            details={"duplicates": seed_dupes},
+        )
+
     # Resolve team names to IDs
     seeds_to_insert = []
     errors = []
@@ -3389,6 +3416,19 @@ def make_bracket_pick(request: Request, body: BracketPickRequest):
         raise ValidationException(
             message="Game is not a tournament game",
             details={"game_id": body.game_id}
+        )
+
+    # Validate picked team is actually in this game
+    valid_team_ids = {game.get("home_team_id"), game.get("away_team_id")}
+    valid_team_ids.discard(None)
+    if body.picked_team_id not in valid_team_ids:
+        raise ValidationException(
+            message="Picked team is not playing in this game",
+            details={
+                "game_id": body.game_id,
+                "picked_team_id": body.picked_team_id,
+                "valid_team_ids": sorted(valid_team_ids),
+            },
         )
 
     tournament = get_tournament(game["season"])

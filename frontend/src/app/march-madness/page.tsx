@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import type { BracketMatchup, RegionSeedEntry, Tournament, TournamentStatus } from '@/lib/types';
 import { BracketView } from './BracketView';
+import { BracketErrorBoundary } from './BracketErrorBoundary';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -177,14 +178,16 @@ export default async function MarchMadnessPage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 py-4 sm:py-8">
-        <BracketView
-          tournament={tournament}
-          matchups={matchups}
-          regionSeeds={regionSeeds}
-          isDemo={isDemo}
-          pickedCount={pickedCount}
-          correctPct={correctPct}
-        />
+        <BracketErrorBoundary>
+          <BracketView
+            tournament={tournament}
+            matchups={matchups}
+            regionSeeds={regionSeeds}
+            isDemo={isDemo}
+            pickedCount={pickedCount}
+            correctPct={correctPct}
+          />
+        </BracketErrorBoundary>
       </main>
 
       {/* Footer */}
