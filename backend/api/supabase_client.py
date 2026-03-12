@@ -667,6 +667,89 @@ def get_season_performance(season: int) -> Optional[dict]:
     return result.data[0] if result.data else None
 
 
+def get_games_needing_scores(days_back: int = 3) -> list[dict]:
+    """
+    Return completed games (past N days) that are missing final scores.
+
+    Args:
+        days_back: How many days back to look (default 3)
+
+    Returns:
+        list of dicts with id, external_id, date, home_team_id, away_team_id
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    cutoff = (today - timedelta(days=days_back)).isoformat()
+    yesterday = (today - timedelta(days=1)).isoformat()
+
+    client = get_supabase()
+    result = client.table("games").select(
+        "id, external_id, date, home_team_id, away_team_id"
+    ).gte("date", cutoff).lte("date", yesterday).is_("home_score", "null").execute()
+    return result.data
+
+
+def update_game_score(game_id: str, home_score: int, away_score: int, status: str = "final") -> dict:
+    """
+    Update final scores for a game and set its status.
+
+    Args:
+        game_id: UUID of the game to update
+        home_score: Final home team score
+        away_score: Final away team score
+        status: New game status (default 'final')
+
+    Returns:
+        Updated game row
+    """
+    # SECURITY: Validate UUID format
+    validated_id = _validate_uuid(game_id, "game_id")
+
+    client = get_supabase()
+    result = client.table("games").update({
+        "home_score": home_score,
+        "away_score": away_score,
+        "status": status,
+    }).eq("id", validated_id).execute()
+    return result.data[0] if result.data else {}
+
+
+def get_predictions_without_bet_results(confidence_tiers: list[str] = None) -> list[dict]:
+    """
+    Return predictions that don't have a corresponding bet_result yet.
+
+    Args:
+        confidence_tiers: Filter to specific tiers (e.g., ['high', 'medium']).
+                          Defaults to ['high', 'medium'].
+
+    Returns:
+        list of prediction dicts with id, game_id, recommended_bet,
+        confidence_tier, spread_at_prediction
+    """
+    if confidence_tiers is None:
+        confidence_tiers = ["high", "medium"]
+
+    client = get_supabase()
+
+    # Fetch predictions with the given tiers and non-pass recommendations
+    pred_result = client.table("predictions").select(
+        "id, game_id, recommended_bet, confidence_tier, spread_at_prediction"
+    ).in_("confidence_tier", confidence_tiers).neq("recommended_bet", "pass").execute()
+
+    if not pred_result.data:
+        return []
+
+    # Find which prediction_ids already have bet_results
+    pred_ids = [p["id"] for p in pred_result.data]
+    existing = client.table("bet_results").select(
+        "prediction_id"
+    ).in_("prediction_id", pred_ids).execute()
+    already_has_bet = {r["prediction_id"] for r in existing.data}
+
+    return [p for p in pred_result.data if p["id"] not in already_has_bet]
+
+
 # ============================================
 # VIEWS / AGGREGATIONS
 # ============================================
