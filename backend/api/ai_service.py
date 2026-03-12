@@ -66,6 +66,9 @@ from .supabase_client import (
     get_game_prediction_markets,
     get_game_arbitrage_opportunities,
     insert_ai_analysis,
+    get_tournament,
+    get_tournament_game_data,
+    upsert_bracket_pick,
 )
 
 load_dotenv()
@@ -824,6 +827,332 @@ Important guidelines:
 Respond with ONLY the JSON object, no additional text."""
 
     return prompt
+
+
+def build_combined_tournament_prompt(context: dict, matchup_metadata: dict) -> str:
+    """
+    Build a combined tournament prompt requesting both a bracket pick AND betting recommendation.
+
+    This extends build_tournament_pick_prompt() by also asking the AI to evaluate
+    the betting lines for the game. A single AI call returns a JSON object with
+    both the tournament winner pick and a spread/moneyline betting recommendation.
+
+    Args:
+        context: Game context dict from build_game_context()
+        matchup_metadata: Tournament metadata (home_seed, away_seed, home_region,
+            away_region, tournament_round, seed_history)
+
+    Returns:
+        Combined prompt string for tournament analysis
+    """
+    home_seed = matchup_metadata.get("home_seed", "?")
+    away_seed = matchup_metadata.get("away_seed", "?")
+    tournament_round = matchup_metadata.get("tournament_round", "unknown")
+    seed_history = matchup_metadata.get("seed_history", "")
+    round_display = tournament_round.replace("_", " ").title()
+    region = matchup_metadata.get("home_region") or matchup_metadata.get("away_region") or "N/A"
+
+    home_team = _sanitize_prompt_value(context.get("home_team", "Unknown"))
+    away_team = _sanitize_prompt_value(context.get("away_team", "Unknown"))
+
+    # Spread context
+    spread_str = ""
+    if context.get("spread") is not None:
+        spread_val = context["spread"]
+        if spread_val < 0:
+            spread_str = f"{home_team} -{abs(spread_val)}"
+        else:
+            spread_str = f"{away_team} -{abs(spread_val)}"
+
+    # KenPom section
+    kenpom_section = ""
+    home_kp = context.get("home_kenpom")
+    away_kp = context.get("away_kenpom")
+    if home_kp or away_kp:
+        kenpom_section = "\n## KENPOM ADVANCED ANALYTICS\n"
+        if home_kp:
+            kenpom_section += f"""
+**{home_team}** (KenPom #{home_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {home_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {home_kp.get('adj_offense', 'N/A')} (#{home_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {home_kp.get('adj_defense', 'N/A')} (#{home_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {home_kp.get('adj_tempo', 'N/A')} (#{home_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {home_kp.get('sos_adj_em', 'N/A')}
+- Luck: {home_kp.get('luck', 'N/A')}
+- Record: {home_kp.get('wins', 0)}-{home_kp.get('losses', 0)}
+"""
+        if away_kp:
+            kenpom_section += f"""
+**{away_team}** (KenPom #{away_kp.get('rank', 'N/A')})
+- Adj. Efficiency Margin: {away_kp.get('adj_efficiency_margin', 'N/A')}
+- Adj. Offense: {away_kp.get('adj_offense', 'N/A')} (#{away_kp.get('adj_offense_rank', 'N/A')})
+- Adj. Defense: {away_kp.get('adj_defense', 'N/A')} (#{away_kp.get('adj_defense_rank', 'N/A')})
+- Adj. Tempo: {away_kp.get('adj_tempo', 'N/A')} (#{away_kp.get('adj_tempo_rank', 'N/A')})
+- Strength of Schedule: {away_kp.get('sos_adj_em', 'N/A')}
+- Luck: {away_kp.get('luck', 'N/A')}
+- Record: {away_kp.get('wins', 0)}-{away_kp.get('losses', 0)}
+"""
+
+    # Haslametrics section
+    haslametrics_section = ""
+    home_hasla = context.get("home_haslametrics")
+    away_hasla = context.get("away_haslametrics")
+    if home_hasla or away_hasla:
+        haslametrics_section = "\n## HASLAMETRICS ANALYTICS\n"
+        if home_hasla:
+            haslametrics_section += f"""
+**{home_team}** (Haslametrics #{home_hasla.get('rank', 'N/A')})
+- All-Play %: {home_hasla.get('all_play_pct', 'N/A')}
+- Momentum: {home_hasla.get('momentum_overall', 'N/A')} (O: {home_hasla.get('momentum_offense', 'N/A')}, D: {home_hasla.get('momentum_defense', 'N/A')})
+- Last 5: {home_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {home_hasla.get('quad_1_record', 'N/A')}, Q2: {home_hasla.get('quad_2_record', 'N/A')}
+"""
+        if away_hasla:
+            haslametrics_section += f"""
+**{away_team}** (Haslametrics #{away_hasla.get('rank', 'N/A')})
+- All-Play %: {away_hasla.get('all_play_pct', 'N/A')}
+- Momentum: {away_hasla.get('momentum_overall', 'N/A')} (O: {away_hasla.get('momentum_offense', 'N/A')}, D: {away_hasla.get('momentum_defense', 'N/A')})
+- Last 5: {away_hasla.get('last_5_record', 'N/A')}
+- Quadrant Records: Q1: {away_hasla.get('quad_1_record', 'N/A')}, Q2: {away_hasla.get('quad_2_record', 'N/A')}
+"""
+
+    prompt = f"""You are an expert NCAA Tournament analyst. For this single-elimination game, provide TWO analyses:
+1. BRACKET PICK — which team advances (winner prediction)
+2. BETTING RECOMMENDATION — whether there is value on the spread or moneyline
+
+## MATCHUP — {round_display}
+**#{away_seed} {away_team}** vs **#{home_seed} {home_team}**
+Region: {region}
+Date: {context['date']}
+Venue: {context['venue'] or 'TBD'} (Neutral site — no home court advantage)
+
+## SEED MATCHUP HISTORY
+{seed_history}
+
+## BETTING LINES
+Spread: {spread_str or 'Not available'}
+Total: O/U {context.get('total') or 'N/A'}
+Home ML: {context.get('home_ml') or 'N/A'}
+Away ML: {context.get('away_ml') or 'N/A'}
+{kenpom_section}{haslametrics_section}
+## REQUIRED OUTPUT FORMAT
+
+Respond in JSON format with exactly these fields:
+{{
+    "picked_team": "home" | "away",
+    "pick_confidence": <float 0.0-1.0>,
+    "pick_key_factors": [<list of 3-5 key factors for the winner pick>],
+    "pick_reasoning": "<2-3 sentence explanation of why this team advances>",
+    "recommended_bet": "home_spread" | "away_spread" | "home_ml" | "away_ml" | "over" | "under" | "pass",
+    "bet_confidence": <float 0.0-1.0>,
+    "bet_key_factors": [<list of 2-4 key factors for the betting recommendation>],
+    "bet_reasoning": "<1-2 sentence explanation of the betting value or lack thereof>"
+}}
+
+Guidelines:
+- "picked_team" MUST be exactly "home" or "away" (home = {home_team}, away = {away_team})
+- pick_confidence: 0.5 = coin flip, 0.85+ = very high (appropriate for 1v16)
+- For betting: tournament spreads are often inflated for chalk teams — look for underdog value
+- If no clear betting edge, set recommended_bet to "pass" and bet_confidence to 0.5
+- When KenPom AdjEM difference is <5 points, underdog cover probability rises significantly
+- Luck factor (KenPom): high-luck teams regress in single elimination — factor into bet confidence
+- Single-elimination variance means upsets happen even when the favorite advances
+
+Respond with ONLY the JSON object, no additional text."""
+
+    return prompt
+
+
+def analyze_tournament_game(
+    game_id: str,
+    provider: AIProvider = "claude",
+    tournament_id: Optional[str] = None,
+) -> dict:
+    """
+    Run combined AI analysis on a tournament game.
+
+    Fetches tournament-specific context (seeds, region, round) from the
+    tournament_bracket view, then calls the AI with a combined prompt that
+    returns both a bracket winner pick and a betting recommendation.
+
+    The bracket pick is saved to the bracket_picks table. The betting
+    recommendation is returned in the response but not stored separately
+    (use /ai-analysis for persistent betting analysis storage).
+
+    Args:
+        game_id: UUID of the tournament game
+        provider: "claude" or "grok"
+        tournament_id: Optional tournament UUID; resolved from the game if not provided
+
+    Returns:
+        dict with keys: game_id, ai_provider, tournament_round, region,
+        home_seed, away_seed, picked_team, picked_team_id, pick_confidence,
+        pick_key_factors, pick_reasoning, recommended_bet, bet_confidence,
+        bet_key_factors, bet_reasoning, created_at
+
+    Raises:
+        ValueError: If game_id is not a tournament game or provider is invalid
+        RuntimeError: If AI call fails after retries
+    """
+    # 1. Fetch tournament bracket data for this game
+    tournament_game = get_tournament_game_data(game_id)
+    if not tournament_game:
+        raise ValueError(
+            f"Game {game_id} not found in tournament_bracket view. "
+            "Ensure the game is marked is_tournament=True and seeds are set."
+        )
+
+    # 2. Build full game context (KenPom, Haslametrics, spreads, etc.)
+    context = build_game_context(game_id)
+
+    # 3. Build tournament-specific metadata
+    home_seed = tournament_game.get("home_seed")
+    away_seed = tournament_game.get("away_seed")
+
+    # Import seed history helper from bracket_pick_generator
+    try:
+        from backend.data_collection.bracket_pick_generator import get_seed_matchup_context
+    except ImportError:
+        from ..data_collection.bracket_pick_generator import get_seed_matchup_context
+
+    matchup_metadata = {
+        "home_seed": home_seed,
+        "away_seed": away_seed,
+        "home_region": tournament_game.get("home_region"),
+        "away_region": tournament_game.get("away_region"),
+        "tournament_round": tournament_game.get("tournament_round", "unknown"),
+        "seed_history": get_seed_matchup_context(home_seed, away_seed),
+    }
+
+    # 4. Build combined prompt
+    prompt = build_combined_tournament_prompt(context, matchup_metadata)
+    prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
+
+    # 5. Call AI provider with retries
+    response_text = None
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            if provider == "claude":
+                if not claude_client:
+                    raise ValueError("Claude API key not configured")
+                response = claude_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1024,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                response_text = response.content[0].text
+            elif provider == "grok":
+                if not grok_client:
+                    raise ValueError("Grok API key not configured")
+                response = grok_client.chat.completions.create(
+                    model="grok-3",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=1024,
+                )
+                response_text = response.choices[0].message.content
+            else:
+                raise ValueError(f"Unknown provider: {provider}")
+            break
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Tournament AI analysis attempt {attempt + 1}/3 failed: {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+    if response_text is None:
+        raise RuntimeError(
+            f"Tournament AI analysis failed after 3 attempts: {_sanitize_error_message(str(last_error))}"
+        )
+
+    # 6. Parse combined AI response
+    analysis = _extract_json_from_response(response_text)
+
+    picked_side = analysis.get("picked_team", "").lower().strip()
+    pick_confidence = min(max(float(analysis.get("pick_confidence", 0.5)), 0.0), 1.0)
+    pick_key_factors = analysis.get("pick_key_factors", [])
+    pick_reasoning = analysis.get("pick_reasoning", "")
+
+    # 7. Map "home"/"away" to team_id
+    full_game = get_game_by_id(game_id)
+    if not full_game:
+        raise ValueError(f"Game {game_id} not found in games table")
+
+    picked_team_id = None
+    picked_team_name = "unknown"
+
+    if picked_side == "home":
+        picked_team_id = full_game["home_team_id"]
+        picked_team_name = context.get("home_team", "home")
+    elif picked_side == "away":
+        picked_team_id = full_game["away_team_id"]
+        picked_team_name = context.get("away_team", "away")
+    else:
+        # Fallback: default to the higher seed (lower number)
+        if (home_seed or 99) <= (away_seed or 99):
+            picked_team_id = full_game["home_team_id"]
+            picked_team_name = context.get("home_team", "home")
+            picked_side = "home"
+        else:
+            picked_team_id = full_game["away_team_id"]
+            picked_team_name = context.get("away_team", "away")
+            picked_side = "away"
+        logger.warning(
+            f"Tournament AI returned '{analysis.get('picked_team')}' instead of home/away. "
+            f"Defaulted to higher seed: {picked_team_name}"
+        )
+
+    # 8. Resolve tournament_id if not provided
+    if not tournament_id:
+        season = tournament_game.get("season")
+        if season:
+            tournament = get_tournament(season)
+            if tournament:
+                tournament_id = tournament["id"]
+
+    # 9. Save bracket pick
+    reasoning_for_db = pick_reasoning
+    if pick_key_factors:
+        reasoning_for_db = f"{pick_reasoning} | Key factors: {'; '.join(pick_key_factors[:5])}"
+
+    pick_data = {
+        "game_id": game_id,
+        "round": matchup_metadata["tournament_round"],
+        "region": matchup_metadata.get("home_region") or matchup_metadata.get("away_region"),
+        "picked_team_id": picked_team_id,
+        "confidence_score": pick_confidence,
+        "reasoning": reasoning_for_db[:1000],
+    }
+    if tournament_id:
+        pick_data["tournament_id"] = tournament_id
+
+    saved_pick = upsert_bracket_pick(pick_data)
+
+    import datetime as dt
+    created_at = saved_pick.get("created_at") or dt.datetime.now().isoformat()
+
+    return {
+        "game_id": game_id,
+        "ai_provider": provider,
+        "prompt_hash": prompt_hash,
+        "tournament_round": matchup_metadata["tournament_round"],
+        "region": matchup_metadata.get("home_region") or matchup_metadata.get("away_region"),
+        "home_seed": home_seed,
+        "away_seed": away_seed,
+        "home_team": context.get("home_team"),
+        "away_team": context.get("away_team"),
+        "picked_team": picked_team_name,
+        "picked_team_id": picked_team_id,
+        "pick_confidence": pick_confidence,
+        "pick_key_factors": pick_key_factors,
+        "pick_reasoning": pick_reasoning,
+        "recommended_bet": analysis.get("recommended_bet", "pass"),
+        "bet_confidence": min(max(float(analysis.get("bet_confidence", 0.5)), 0.0), 1.0),
+        "bet_key_factors": analysis.get("bet_key_factors", []),
+        "bet_reasoning": analysis.get("bet_reasoning", ""),
+        "created_at": created_at,
+    }
 
 
 def analyze_with_claude(context: dict) -> dict:

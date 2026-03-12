@@ -1019,6 +1019,19 @@ def get_tournament_bracket_view(
     return result.data or []
 
 
+@timed_query("get_tournament_game_data")
+def get_tournament_game_data(game_id: str) -> Optional[dict]:
+    """Get tournament-specific data for a game from the tournament_bracket view.
+
+    Returns seed, region, round, spread, and existing pick data for a single
+    tournament game. Returns None if the game_id is not a tournament game.
+    """
+    game_id = _validate_uuid(game_id, "game_id")
+    client = get_supabase()
+    result = client.table("tournament_bracket").select("*").eq("game_id", game_id).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
 @timed_query("get_region_summary")
 def get_region_summary(season: int) -> list[dict]:
     """Query the tournament_region_summary view for a season."""

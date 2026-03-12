@@ -214,11 +214,12 @@ from .supabase_client import (
     bulk_insert_seeds,
     get_tournament_bracket_view,
     get_region_summary,
+    get_tournament_game_data,
     upsert_bracket_pick,
     grade_bracket_picks,
     update_eliminated_teams,
 )
-from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context
+from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
 
 
 # =============================================================================
@@ -3257,6 +3258,83 @@ class BracketPickRequest(BaseModel):
         return v
 
 
+class TournamentAIAnalysisRequest(BaseModel):
+    """
+    Request model for POST /tournament/ai-analysis.
+
+    Runs a combined AI analysis on a single tournament game, returning both
+    a bracket winner pick and a betting recommendation in one synchronous call.
+
+    Example Request:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "provider": "claude"
+        }
+    """
+    game_id: str = Field(..., description="UUID of the tournament game to analyze")
+    provider: Literal["claude", "grok"] = Field(
+        default="claude",
+        description="AI provider: 'claude' or 'grok'"
+    )
+
+    @field_validator('game_id')
+    @classmethod
+    def validate_game_id(cls, v: str) -> str:
+        if not UUID_PATTERN.match(v):
+            raise ValueError('game_id must be a valid UUID')
+        return v
+
+
+class TournamentAIAnalysisResponse(BaseModel):
+    """
+    Response model for POST /tournament/ai-analysis.
+
+    Contains both a tournament bracket pick (who wins the game) and a
+    betting recommendation (spread/moneyline value), along with tournament
+    context (seeds, region, round).
+
+    Example Response:
+        {
+            "game_id": "123e4567-...",
+            "ai_provider": "claude",
+            "tournament_round": "round_64",
+            "region": "East",
+            "home_seed": 1,
+            "away_seed": 16,
+            "home_team": "Duke",
+            "away_team": "UMBC",
+            "picked_team": "Duke",
+            "picked_team_id": "abc123-...",
+            "pick_confidence": 0.96,
+            "pick_key_factors": ["KenPom AdjEM gap of 28 points", "..."],
+            "pick_reasoning": "Duke is a heavy favorite with elite efficiency ratings...",
+            "recommended_bet": "away_spread",
+            "bet_confidence": 0.61,
+            "bet_key_factors": ["16-seeds cover the spread ~40% of the time", "..."],
+            "bet_reasoning": "UMBC +25.5 has value given typical 1v16 final scores...",
+            "created_at": "2026-03-15T10:00:00Z"
+        }
+    """
+    game_id: str = Field(description="UUID of the analyzed game")
+    ai_provider: str = Field(description="AI provider used: 'claude' or 'grok'")
+    tournament_round: str = Field(description="Tournament round identifier")
+    region: Optional[str] = Field(default=None, description="Tournament region")
+    home_seed: Optional[int] = Field(default=None, description="Home team seed (1-16)")
+    away_seed: Optional[int] = Field(default=None, description="Away team seed (1-16)")
+    home_team: Optional[str] = Field(default=None, description="Home team name")
+    away_team: Optional[str] = Field(default=None, description="Away team name")
+    picked_team: str = Field(description="Name of the predicted tournament winner")
+    picked_team_id: Optional[str] = Field(default=None, description="UUID of the picked team")
+    pick_confidence: float = Field(ge=0.0, le=1.0, description="Bracket pick confidence (0.5=coin flip, 0.9+=very high)")
+    pick_key_factors: list[str] = Field(description="Key factors for the winner pick")
+    pick_reasoning: str = Field(description="Explanation of why this team advances")
+    recommended_bet: str = Field(description="Betting recommendation: spread, ML, or 'pass'")
+    bet_confidence: float = Field(ge=0.0, le=1.0, description="Betting confidence score")
+    bet_key_factors: list[str] = Field(description="Key factors for the betting recommendation")
+    bet_reasoning: str = Field(description="Explanation of the betting value (or lack thereof)")
+    created_at: Optional[str] = Field(default=None, description="ISO timestamp when analysis was created")
+
+
 class GeneratePicksRequest(BaseModel):
     """Request to generate AI bracket picks for tournament games."""
     season: int = Field(..., ge=2000, le=2100, description="Tournament season year")
@@ -3469,6 +3547,148 @@ def grade_tournament(
         "incorrect": grade_result["incorrect"],
         "teams_eliminated": eliminated_count,
     })
+
+
+@app.post("/tournament/ai-analysis", response_model=TournamentAIAnalysisResponse, tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
+def tournament_ai_analysis(request: Request, body: TournamentAIAnalysisRequest):
+    """
+    Run combined AI analysis on a single tournament game.
+
+    Returns both a bracket winner pick and a betting recommendation in one
+    synchronous call. Tournament-specific context (seeds, region, round, and
+    historical seed matchup data) is automatically fetched and included in the AI prompt.
+
+    The bracket pick is saved to the bracket_picks table. The betting recommendation
+    is returned in the response for display purposes.
+
+    Args:
+        body: TournamentAIAnalysisRequest with game_id and provider
+
+    Returns:
+        TournamentAIAnalysisResponse: Combined tournament pick + betting analysis
+
+    Raises:
+        404 Not Found: If game_id is not a tournament game or seeds are not set
+        503 Service Unavailable: If AI provider is not configured
+        422 Validation Error: If request body is invalid
+
+    Rate Limit: 5 requests per minute per IP
+
+    Example Request:
+        POST /tournament/ai-analysis
+        {"game_id": "123e4567-e89b-12d3-a456-426614174000", "provider": "claude"}
+    """
+    try:
+        result = analyze_tournament_game(body.game_id, body.provider)
+
+        return TournamentAIAnalysisResponse(
+            game_id=body.game_id,
+            ai_provider=result["ai_provider"],
+            tournament_round=result["tournament_round"],
+            region=result.get("region"),
+            home_seed=result.get("home_seed"),
+            away_seed=result.get("away_seed"),
+            home_team=result.get("home_team"),
+            away_team=result.get("away_team"),
+            picked_team=result["picked_team"],
+            picked_team_id=result.get("picked_team_id"),
+            pick_confidence=result["pick_confidence"],
+            pick_key_factors=result.get("pick_key_factors", []),
+            pick_reasoning=result["pick_reasoning"],
+            recommended_bet=result["recommended_bet"],
+            bet_confidence=result["bet_confidence"],
+            bet_key_factors=result.get("bet_key_factors", []),
+            bet_reasoning=result["bet_reasoning"],
+            created_at=result.get("created_at"),
+        )
+
+    except ValueError as e:
+        error_msg = str(e)[:200]
+        if "not found in tournament_bracket" in error_msg:
+            raise NotFoundException(
+                resource="Tournament game",
+                identifier=body.game_id
+            )
+        raise ValidationException(
+            message=error_msg,
+            details={"game_id": body.game_id, "provider": body.provider}
+        )
+    except Exception as e:
+        logger.error(
+            f"Tournament AI analysis failed for game {body.game_id}: {e}",
+            exc_info=True
+        )
+        raise ExternalApiException(
+            service=f"AI/{body.provider}",
+            message="Tournament AI analysis failed. Please try again later."
+        )
+
+
+@app.get("/tournament/ai-analysis", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_tournament_ai_analysis(
+    request: Request,
+    game_id: Optional[str] = Query(
+        default=None,
+        description="Filter by game UUID",
+        pattern=r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    ),
+    season: Optional[int] = Query(
+        default=None,
+        ge=2000,
+        le=2100,
+        description="Filter by tournament season year",
+    ),
+    round: Optional[str] = Query(
+        default=None,
+        description="Filter by tournament round",
+    ),
+):
+    """
+    Retrieve saved tournament AI analysis (bracket picks) for a game or season.
+
+    Returns bracket picks from the tournament_bracket view, which includes the
+    saved AI pick, confidence score, and reasoning for each game.
+
+    Query Parameters:
+        game_id: Fetch analysis for a specific game (returns single result)
+        season: Fetch all picks for a tournament season
+        round: Combined with season, filter by round (e.g., 'round_64')
+
+    Returns:
+        List of tournament bracket picks with AI reasoning
+
+    Example:
+        GET /tournament/ai-analysis?season=2026&round=round_64
+        GET /tournament/ai-analysis?game_id=123e4567-...
+    """
+    if round and round not in VALID_ROUNDS:
+        raise ValidationException(
+            message="Invalid round",
+            details={"valid": list(VALID_ROUNDS)}
+        )
+
+    if game_id:
+        # Single game lookup
+        data = get_tournament_game_data(game_id)
+        if not data:
+            raise NotFoundException(resource="Tournament game", identifier=game_id)
+        # Only return games that have a saved pick
+        if not data.get("picked_team_id"):
+            return success_response([])
+        return success_response([data])
+
+    if season is None:
+        raise ValidationException(
+            message="Provide either game_id or season query parameter",
+            details={}
+        )
+
+    # Season-level lookup (only games with picks)
+    rows = get_tournament_bracket_view(season, tournament_round=round)
+    picked = [r for r in rows if r.get("picked_team_id")]
+    return success_response(picked)
 
 
 @app.post("/tournament/generate-picks", tags=["Tournament"])
