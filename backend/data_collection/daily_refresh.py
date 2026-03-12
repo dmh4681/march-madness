@@ -727,26 +727,43 @@ def run_predictions(force_regenerate: bool = False) -> dict:
 
 
 def update_game_results() -> dict:
-    """Update scores for completed games."""
-    print("\n=== Updating Game Results ===")
+    """
+    Update scores for completed games and grade pending bets.
 
-    client = _ensure_supabase()
+    Runs the full bet results population pipeline:
+    1. Fetch final scores from ESPN for the past 3 days
+    2. Auto-create pending bet_results from today's high/medium predictions
+    3. Grade pending bets where scores are now available
+    """
+    print("\n=== Updating Game Results & Grading Bets ===")
 
-    # Find games that should have finished but don't have scores
-    # Use Eastern time for consistency with game dates
-    yesterday = get_eastern_date_yesterday().isoformat()
+    try:
+        from .bet_grader import run_bet_results_pipeline
 
-    result = client.table("games").select("id, external_id").lte("date", yesterday).is_("home_score", "null").limit(50).execute()
+        pipeline_results = run_bet_results_pipeline(days_back=3, min_confidence_tier="medium")
 
-    if not result.data:
-        print("No games need score updates")
-        return {"games_scored": 0}
+        scores = pipeline_results.get("scores", {})
+        pending = pipeline_results.get("pending_bets", {})
+        grading = pipeline_results.get("grading", {})
 
-    # Score updates handled by ESPN sync pipeline
-    # For now, just report what needs updating
-    print(f"Found {len(result.data)} games needing scores")
+        print(f"  Scores: {scores.get('games_scored', 0)} updated, "
+              f"{scores.get('games_already_scored', 0)} already scored, "
+              f"{scores.get('games_not_found', 0)} not in DB")
+        print(f"  Pending bets: {pending.get('bets_created', 0)} created, "
+              f"{pending.get('bets_skipped', 0)} skipped")
+        print(f"  Grading: {grading.get('bets_graded', 0)} graded "
+              f"({grading.get('wins', 0)}W / {grading.get('losses', 0)}L / "
+              f"{grading.get('pushes', 0)}P), "
+              f"{grading.get('bets_still_pending', 0)} still pending")
 
-    return {"games_needing_scores": len(result.data)}
+        return pipeline_results
+
+    except ImportError as e:
+        print(f"  Bet grader import error (non-fatal): {e}")
+        return {"error": str(e)}
+    except Exception as e:
+        print(f"  Error in bet results pipeline (non-fatal): {e}")
+        return {"error": str(e)}
 
 
 def create_today_games_view() -> dict:

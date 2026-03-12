@@ -2093,6 +2093,108 @@ def refresh_haslametrics_endpoint():
         raise HTTPException(status_code=500, detail="Haslametrics refresh failed. Please try again later.")
 
 
+@app.post("/populate-scores", tags=["Admin"])
+def populate_scores_endpoint(
+    days_back: Annotated[
+        int,
+        Query(ge=1, le=14, description="Number of past days to scan for missing scores")
+    ] = 3
+):
+    """
+    Fetch final game scores from ESPN and update the games table.
+
+    Scans the past N days for games without final scores, fetches results
+    from ESPN's public scoreboard API, and writes home_score/away_score
+    to the games table with status='final'.
+
+    Matches games by ESPN external_id (e.g., 'espn-401234567').
+
+    Query Parameters:
+        days_back: Days to look back for missing scores (default 3, max 14)
+
+    Returns:
+        dict: Counts of games scored, already scored, not found in DB, errors
+
+    Example Response:
+        {
+            "status": "success",
+            "results": {
+                "games_scored": 12,
+                "games_already_scored": 45,
+                "games_not_found": 3,
+                "errors": 0
+            }
+        }
+    """
+    try:
+        from ..data_collection.bet_grader import populate_game_scores
+
+        results = populate_game_scores(days_back=days_back)
+        return {"status": "success", "results": results}
+
+    except ImportError as e:
+        logger.error(f"Bet grader import error: {e}", exc_info=True)
+        return {"status": "error", "error": "Service configuration error"}
+    except Exception as e:
+        logger.error(f"Score population failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Score population failed. Please try again later.")
+
+
+@app.post("/grade-bets", tags=["Admin"])
+def grade_bets_endpoint(
+    min_confidence_tier: Annotated[
+        str,
+        Query(
+            pattern="^(high|medium)$",
+            description="Minimum confidence tier for auto-creating pending bets"
+        )
+    ] = "medium"
+):
+    """
+    Run the full bet results population and grading pipeline.
+
+    Pipeline steps:
+    1. **Populate scores** – Fetch final scores from ESPN for the past 3 days
+    2. **Create pending bets** – Auto-create pending bet_results for today's
+       high/medium confidence predictions that don't have a bet_result yet
+    3. **Grade bets** – For all pending bets whose game now has final scores,
+       calculate win/loss/push and units won/lost
+
+    Query Parameters:
+        min_confidence_tier: Lowest tier to create pending bets for
+                             ('high' = only high-confidence picks,
+                              'medium' = both high and medium, default)
+
+    Returns:
+        dict: Results from each pipeline step
+
+    Example Response:
+        {
+            "status": "success",
+            "results": {
+                "scores":       {"games_scored": 8, "games_already_scored": 40},
+                "pending_bets": {"bets_created": 5, "bets_skipped": 12},
+                "grading":      {"bets_graded": 6, "wins": 4, "losses": 2, "pushes": 0}
+            }
+        }
+    """
+    try:
+        from ..data_collection.bet_grader import run_bet_results_pipeline
+
+        results = run_bet_results_pipeline(
+            days_back=3,
+            min_confidence_tier=min_confidence_tier,
+        )
+        return {"status": "success", "results": results}
+
+    except ImportError as e:
+        logger.error(f"Bet grader import error: {e}", exc_info=True)
+        return {"status": "error", "error": "Service configuration error"}
+    except Exception as e:
+        logger.error(f"Bet grading failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Bet grading failed. Please try again later.")
+
+
 @app.post("/refresh-prediction-markets", tags=["Admin"])
 def refresh_prediction_markets_endpoint():
     """
