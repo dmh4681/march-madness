@@ -10,6 +10,7 @@ interface ErrorState {
   type: ErrorType;
   message: string;
   canRetry: boolean;
+  status?: number;
 }
 
 const PROGRESS_PHASES = [
@@ -17,6 +18,19 @@ const PROGRESS_PHASES = [
   'Running AI analysis...',
   'Generating picks...',
 ];
+
+// Returns true for error types that should be auto-retried (transient)
+function isTransientError(type: ErrorType, status?: number): boolean {
+  if (type === 'timeout' || type === 'network') return true;
+  if (type === 'api_limit') return true;
+  if (type === 'server' && status != null && (status === 503 || status === 504)) return true;
+  return false;
+}
+
+// Exponential backoff delay with full jitter (ms): random(0, min(cap, base * 2^attempt))
+function jitterDelay(attempt: number, baseMs = 1500, capMs = 20000): number {
+  return Math.random() * Math.min(capMs, baseMs * Math.pow(2, attempt));
+}
 
 // Parse error response and categorize it
 function parseError(err: unknown, response?: Response, responseText?: string): ErrorState {
@@ -48,23 +62,37 @@ function parseError(err: unknown, response?: Response, responseText?: string): E
         type: 'api_limit',
         message: 'Too many requests. Please wait a moment before trying again.',
         canRetry: true,
+        status,
       };
     }
 
-    // Server errors (5xx)
+    // Service unavailable / gateway timeout
+    if (status === 503 || status === 504) {
+      return {
+        type: 'server',
+        message: status === 503
+          ? 'The AI service is temporarily unavailable. Retrying automatically...'
+          : 'The request timed out at the server. Retrying automatically...',
+        canRetry: true,
+        status,
+      };
+    }
+
+    // Other server errors (5xx)
     if (status >= 500) {
-      // Check for specific Claude API errors in response
       if (responseText?.includes('overloaded') || responseText?.includes('capacity')) {
         return {
           type: 'api_limit',
           message: 'The AI service is currently experiencing high demand. Please try again shortly.',
           canRetry: true,
+          status,
         };
       }
       return {
         type: 'server',
         message: 'The server encountered an error. Our team has been notified.',
         canRetry: true,
+        status,
       };
     }
 
@@ -74,7 +102,7 @@ function parseError(err: unknown, response?: Response, responseText?: string): E
       if (responseText) {
         try {
           const data = JSON.parse(responseText);
-          detail = data.detail || '';
+          detail = data.detail || data.error?.message || '';
         } catch {
           detail = responseText.substring(0, 100);
         }
@@ -83,6 +111,7 @@ function parseError(err: unknown, response?: Response, responseText?: string): E
         type: 'unknown',
         message: detail || `Request failed (${status})`,
         canRetry: status !== 400, // Don't retry bad requests
+        status,
       };
     }
   }
@@ -114,15 +143,24 @@ export function AIAnalysisButton({
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>('claude');
   const [retryCount, setRetryCount] = useState(0);
 
-  const runAnalysis = useCallback(async (provider: AIProvider = selectedProvider, isRetry = false) => {
+  // Maximum automatic retries for transient errors before prompting manual retry
+  const AUTO_RETRY_LIMIT = 2;
+  const [autoRetryCount, setAutoRetryCount] = useState(0);
+
+  const runAnalysis = useCallback(async (
+    provider: AIProvider = selectedProvider,
+    isRetry = false,
+    _autoAttempt = 0,
+  ) => {
     setLoading(true);
     setError(null);
     setSuccess(false);
 
     if (isRetry) {
       setRetryCount(prev => prev + 1);
-    } else {
+    } else if (_autoAttempt === 0) {
       setRetryCount(0);
+      setAutoRetryCount(0);
     }
 
     let response: Response | undefined;
@@ -131,7 +169,7 @@ export function AIAnalysisButton({
     try {
       const controller = new AbortController();
       // Longer timeout for retries (up to 3 minutes)
-      const timeout = isRetry ? 180000 : 120000;
+      const timeout = isRetry || _autoAttempt > 0 ? 180000 : 120000;
       const timeoutId = setTimeout(() => controller.abort(), timeout);
 
       const requestUrl = `${apiUrl}/ai-analysis`;
@@ -139,9 +177,6 @@ export function AIAnalysisButton({
         game_id: gameId,
         provider: provider,
       });
-
-      console.log('Making request to:', requestUrl);
-      console.log('Request body:', requestBody);
 
       response = await fetch(requestUrl, {
         method: 'POST',
@@ -160,19 +195,10 @@ export function AIAnalysisButton({
       // Read response text first to handle empty responses
       responseText = await response.text();
 
-      // Log for debugging
-      console.log('AI Analysis Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        textLength: responseText?.length || 0,
-        textPreview: responseText?.substring(0, 200),
-      });
-
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      // Verify we got valid JSON back
       if (!responseText) {
         throw new Error('Empty response from server');
       }
@@ -184,14 +210,35 @@ export function AIAnalysisButton({
       }
 
       setSuccess(true);
-      // Refresh the page to show new analysis
+      setLoading(false);
       setTimeout(() => {
         window.location.reload();
       }, 1500);
     } catch (err) {
       const errorState = parseError(err, response, responseText);
+      const nextAutoAttempt = _autoAttempt + 1;
+
+      // Auto-retry transient errors with exponential backoff (without user intervention)
+      if (
+        isTransientError(errorState.type, errorState.status) &&
+        nextAutoAttempt <= AUTO_RETRY_LIMIT
+      ) {
+        const delay = jitterDelay(_autoAttempt);
+        setAutoRetryCount(nextAutoAttempt);
+        setLoading(true); // Keep spinner while waiting
+        // Show a "retrying" message by setting a soft error state
+        setError({
+          type: errorState.type,
+          message: `${errorState.message} Auto-retrying (${nextAutoAttempt}/${AUTO_RETRY_LIMIT})...`,
+          canRetry: true,
+        });
+        setTimeout(() => {
+          runAnalysis(provider, false, nextAutoAttempt);
+        }, delay);
+        return;
+      }
+
       setError(errorState);
-    } finally {
       setLoading(false);
     }
   }, [apiUrl, gameId, selectedProvider]);
@@ -310,15 +357,17 @@ export function AIAnalysisButton({
         )}
       </button>
 
-      {/* Loading progress hint */}
+      {/* Loading progress hint (show auto-retry status if applicable) */}
       {loading && (
         <p className="text-xs text-gray-500 text-center animate-pulse">
-          {PROGRESS_PHASES[progressIndex]}
+          {autoRetryCount > 0
+            ? `Auto-retrying (${autoRetryCount}/${AUTO_RETRY_LIMIT})...`
+            : PROGRESS_PHASES[progressIndex]}
         </p>
       )}
 
-      {/* Error State with Retry */}
-      {error && (
+      {/* Error State with Retry — only shown when not actively loading/auto-retrying */}
+      {error && !loading && (
         <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
           <div className="flex items-start gap-3">
             <ErrorIcon type={error.type} />

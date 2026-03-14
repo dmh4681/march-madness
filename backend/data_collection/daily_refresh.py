@@ -215,6 +215,21 @@ from backend.api.supabase_client import (
     query_timer,
 )
 
+try:
+    from backend.utils.retry import (
+        retry_with_backoff,
+        _jitter_delay,
+        odds_api_breaker,
+        CircuitBreakerOpen,
+    )
+except ImportError:
+    from ..utils.retry import (
+        retry_with_backoff,
+        _jitter_delay,
+        odds_api_breaker,
+        CircuitBreakerOpen,
+    )
+
 # Import cache utilities for invalidation during refresh
 try:
     from backend.utils.cache import invalidate_ratings_caches, ratings_cache
@@ -438,7 +453,11 @@ def get_team_id(name: str) -> str | None:
 
 
 def fetch_odds_api_spreads() -> list[dict]:
-    """Fetch current college basketball spreads from The Odds API."""
+    """Fetch current college basketball spreads from The Odds API.
+
+    Retries up to 3 times with exponential backoff + jitter on transient errors.
+    Uses a circuit breaker to avoid hammering a down service.
+    """
     print("\n=== Fetching Spreads from The Odds API ===")
 
     url = "https://api.the-odds-api.com/v4/sports/basketball_ncaab/odds"
@@ -449,23 +468,64 @@ def fetch_odds_api_spreads() -> list[dict]:
         "oddsFormat": "american",
     }
 
-    try:
-        response = requests.get(url, params=params, timeout=30)
-        response.raise_for_status()
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
 
-        data = response.json()
-        print(f"Fetched {len(data)} games with odds")
+    last_error = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            with odds_api_breaker:
+                response = requests.get(url, params=params, timeout=30)
 
-        # Check remaining requests
-        remaining = response.headers.get("x-requests-remaining", "unknown")
-        used = response.headers.get("x-requests-used", "unknown")
-        print(f"API requests: {used} used, {remaining} remaining this month")
+                # Handle rate limiting explicitly
+                if response.status_code == 429:
+                    retry_after = float(response.headers.get("retry-after", BASE_DELAY * (2 ** attempt)))
+                    sleep_for = min(retry_after, MAX_DELAY)
+                    logger.warning(
+                        f"Odds API rate limited (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                        f"sleeping {sleep_for:.0f}s"
+                    )
+                    last_error = requests.exceptions.HTTPError(
+                        f"429 Too Many Requests", response=response
+                    )
+                    if attempt < MAX_ATTEMPTS - 1:
+                        import time as _time
+                        _time.sleep(sleep_for)
+                    continue
 
-        return data
+                response.raise_for_status()
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching odds: {e}")
-        return []
+            data = response.json()
+            print(f"Fetched {len(data)} games with odds")
+
+            remaining = response.headers.get("x-requests-remaining", "unknown")
+            used = response.headers.get("x-requests-used", "unknown")
+            print(f"API requests: {used} used, {remaining} remaining this month")
+
+            return data
+
+        except CircuitBreakerOpen as e:
+            print(f"Odds API circuit breaker open: {e}")
+            return []
+        except requests.exceptions.Timeout as e:
+            last_error = e
+            logger.warning(f"Odds API timeout (attempt {attempt + 1}/{MAX_ATTEMPTS})")
+            if attempt < MAX_ATTEMPTS - 1:
+                import time as _time
+                _time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        except requests.exceptions.ConnectionError as e:
+            last_error = e
+            logger.warning(f"Odds API connection error (attempt {attempt + 1}/{MAX_ATTEMPTS}): {e}")
+            if attempt < MAX_ATTEMPTS - 1:
+                import time as _time
+                _time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching odds: {e}")
+            return []
+
+    print(f"Error fetching odds after {MAX_ATTEMPTS} attempts: {last_error}")
+    return []
 
 
 def process_odds_data(odds_data: list[dict]) -> dict:

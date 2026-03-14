@@ -51,6 +51,7 @@ import json
 import hashlib
 import logging
 import time
+import random
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
@@ -70,6 +71,23 @@ from .supabase_client import (
     get_tournament_game_data,
     upsert_bracket_pick,
 )
+
+try:
+    from backend.utils.retry import (
+        _jitter_delay,
+        RateLimitError,
+        claude_breaker,
+        grok_breaker,
+        CircuitBreakerOpen,
+    )
+except ImportError:
+    from ..utils.retry import (
+        _jitter_delay,
+        RateLimitError,
+        claude_breaker,
+        grok_breaker,
+        CircuitBreakerOpen,
+    )
 
 load_dotenv()
 
@@ -1195,22 +1213,41 @@ def analyze_with_claude(context: dict) -> dict:
     prompt = build_analysis_prompt(context)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
+
     last_error = None
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            response = claude_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
+            with claude_breaker:
+                response = claude_client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    max_tokens=1024,
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ]
+                )
             break
+        except CircuitBreakerOpen as e:
+            raise  # Don't retry — circuit is open
+        except anthropic.RateLimitError as e:
+            last_error = e
+            # Respect Retry-After header if present; otherwise back off
+            retry_after = float(e.response.headers.get("retry-after", BASE_DELAY * (2 ** attempt)))
+            sleep_for = min(retry_after, MAX_DELAY)
+            logger.warning(
+                f"Claude rate limited (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                f"sleeping {sleep_for:.0f}s"
+            )
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(sleep_for)
         except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
             last_error = e
-            logger.warning(f"Claude API attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+            logger.warning(f"Claude API attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+            if attempt < MAX_ATTEMPTS - 1:
+                delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
+                time.sleep(delay)
     else:
         raise last_error
 
@@ -1270,23 +1307,44 @@ def analyze_with_grok(context: dict) -> dict:
     prompt = build_analysis_prompt(context)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
-    from openai import APITimeoutError, APIConnectionError
+    from openai import APITimeoutError, APIConnectionError, RateLimitError as OpenAIRateLimitError
+
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
+
     last_error = None
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            response = grok_client.chat.completions.create(
-                model="grok-3",
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=1024,
-            )
+            with grok_breaker:
+                response = grok_client.chat.completions.create(
+                    model="grok-3",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=1024,
+                )
             break
+        except CircuitBreakerOpen as e:
+            raise  # Don't retry — circuit is open
+        except OpenAIRateLimitError as e:
+            last_error = e
+            retry_after = BASE_DELAY * (2 ** attempt)
+            if hasattr(e, "response") and e.response is not None:
+                retry_after = float(e.response.headers.get("retry-after", retry_after))
+            sleep_for = min(retry_after, MAX_DELAY)
+            logger.warning(
+                f"Grok rate limited (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                f"sleeping {sleep_for:.0f}s"
+            )
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(sleep_for)
         except (APITimeoutError, APIConnectionError) as e:
             last_error = e
-            logger.warning(f"Grok API attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+            logger.warning(f"Grok API attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+            if attempt < MAX_ATTEMPTS - 1:
+                delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
+                time.sleep(delay)
     else:
         raise last_error
 
@@ -1310,7 +1368,12 @@ def analyze_with_grok(context: dict) -> dict:
     }
 
 
-def analyze_game(game_id: str, provider: AIProvider = "claude", save: bool = True) -> dict:
+def analyze_game(
+    game_id: str,
+    provider: AIProvider = "claude",
+    save: bool = True,
+    fallback_provider: bool = True,
+) -> dict:
     """
     Run AI analysis on a game.
 
@@ -1318,6 +1381,7 @@ def analyze_game(game_id: str, provider: AIProvider = "claude", save: bool = Tru
         game_id: The game UUID
         provider: Which AI to use ("claude" or "grok")
         save: Whether to save the analysis to the database
+        fallback_provider: If True and primary provider fails, try the other provider
 
     Returns:
         Analysis result dict
@@ -1325,13 +1389,48 @@ def analyze_game(game_id: str, provider: AIProvider = "claude", save: bool = Tru
     # Build context
     context = build_game_context(game_id)
 
-    # Run analysis
+    # Run analysis with optional failover to the other provider
+    primary_error: Optional[Exception] = None
+    fallback: Optional[AIProvider] = "grok" if provider == "claude" else "claude"
+
     if provider == "claude":
-        analysis = analyze_with_claude(context)
+        primary_fn = analyze_with_claude
+        fallback_fn = analyze_with_grok if fallback_provider else None
+        fallback_available = bool(grok_client)
     elif provider == "grok":
-        analysis = analyze_with_grok(context)
+        primary_fn = analyze_with_grok
+        fallback_fn = analyze_with_claude if fallback_provider else None
+        fallback_available = bool(claude_client)
     else:
         raise ValueError(f"Unknown provider: {provider}")
+
+    try:
+        analysis = primary_fn(context)
+    except CircuitBreakerOpen as e:
+        logger.warning(f"Circuit breaker blocked {provider}: {e}")
+        primary_error = e
+        analysis = None
+    except Exception as e:
+        logger.error(f"Primary AI provider '{provider}' failed: {_sanitize_error_message(str(e))}")
+        primary_error = e
+        analysis = None
+
+    if analysis is None and fallback_fn and fallback_available:
+        logger.info(f"Falling back to '{fallback}' after '{provider}' failure")
+        try:
+            analysis = fallback_fn(context)
+            # Tag the analysis so callers know it came from the fallback
+            analysis["fallback_from"] = provider
+        except Exception as fallback_exc:
+            logger.error(
+                f"Fallback provider '{fallback}' also failed: "
+                f"{_sanitize_error_message(str(fallback_exc))}"
+            )
+            # Re-raise the original error
+            raise primary_error from fallback_exc  # type: ignore[misc]
+
+    if analysis is None:
+        raise primary_error  # type: ignore[misc]
 
     # Add game_id to analysis
     analysis["game_id"] = game_id
