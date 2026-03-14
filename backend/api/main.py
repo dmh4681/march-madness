@@ -147,6 +147,7 @@ from .middleware import (
 )
 from slowapi.errors import RateLimitExceeded
 from backend.utils.env_validator import validate_environment
+from backend.utils.retry import get_all_circuit_stats
 
 # Import secrets validator
 from .secrets_validator import (
@@ -981,6 +982,14 @@ def root():
     }
 
 
+def _get_circuit_breaker_stats() -> list:
+    """Return circuit breaker stats for the health endpoint."""
+    try:
+        return get_all_circuit_stats()
+    except Exception:
+        return []
+
+
 @app.get("/health", tags=["Health"])
 def health():
     """
@@ -1041,6 +1050,7 @@ def health():
         # Additional detail about secrets configuration
         "secrets_valid": _secrets_validation.is_valid if '_secrets_validation' in dir() else False,
         "missing_recommended": _secrets_validation.missing_recommended if '_secrets_validation' in dir() else [],
+        "circuit_breakers": _get_circuit_breaker_stats(),
     }
 
 
