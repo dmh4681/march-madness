@@ -124,7 +124,29 @@ WHERE g.is_tournament = TRUE
 ORDER BY g.date, g.tip_time, g.id;
 
 -- ============================================
--- SECTION 3: Analyze New Tables
+-- SECTION 3: Tournament Game Indexes
+-- ============================================
+-- These cover patterns in supabase_client.py not addressed above.
+
+-- tournament_bracket view season filter
+-- Pattern: WHERE g.is_tournament = TRUE AND g.season = X
+-- (view consumers always filter by season via PostgREST)
+CREATE INDEX IF NOT EXISTS idx_games_tournament_season
+ON games(season)
+WHERE is_tournament = TRUE;
+
+COMMENT ON INDEX idx_games_tournament_season IS 'Partial index for tournament games by season - used by tournament_bracket view queries';
+
+-- update_eliminated_teams grading pipeline
+-- Pattern: WHERE season = X AND is_tournament = TRUE AND status = 'final'
+CREATE INDEX IF NOT EXISTS idx_games_tournament_season_status
+ON games(season, status)
+WHERE is_tournament = TRUE;
+
+COMMENT ON INDEX idx_games_tournament_season_status IS 'Partial index for completed tournament games by season and status - used by grading pipeline';
+
+-- ============================================
+-- SECTION 4: Analyze New Tables
 -- ============================================
 
 ANALYZE tournaments;
