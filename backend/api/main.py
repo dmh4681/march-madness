@@ -72,7 +72,7 @@ def get_eastern_date_today() -> date:
 
 from dotenv import load_dotenv
 from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi import FastAPI, HTTPException, Request, Query, Path
+from fastapi import FastAPI, HTTPException, Request, Response, Query, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -221,6 +221,7 @@ from .supabase_client import (
     update_eliminated_teams,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
+from backend.utils.cache import ai_cache
 
 
 # =============================================================================
@@ -720,6 +721,10 @@ class AIAnalysisRequest(BaseModel):
         default="claude",
         description="AI provider: 'claude' (Anthropic Claude Sonnet 4) or 'grok' (xAI Grok-3)"
     )
+    force_refresh: bool = Field(
+        default=False,
+        description="If True, bypass cache and generate a fresh AI analysis (counts against rate limit)"
+    )
 
     @field_validator('game_id')
     @classmethod
@@ -767,6 +772,7 @@ class AIAnalysisResponse(BaseModel):
     key_factors: list[str] = Field(description="3-5 key factors driving the recommendation")
     reasoning: str = Field(description="2-3 sentence explanation of the analysis")
     created_at: Optional[str] = Field(default=None, description="ISO timestamp when analysis was created")
+    cached: bool = Field(default=False, description="True if this result was served from cache (no AI API call made)")
 
 
 class StatsResponse(BaseModel):
@@ -1102,6 +1108,7 @@ def performance_stats(request: Request):
         "timestamp": datetime.now().isoformat(),
         "query_stats": get_query_stats(),
         "cache_stats": get_cache_stats(),
+        "ai_cache_stats": ai_cache.get_stats(),
     }
 
 
@@ -1298,7 +1305,7 @@ def ai_analysis_get():
 
 @app.post("/ai-analysis", response_model=AIAnalysisResponse, tags=["AI Analysis"])
 @limiter.limit(RATE_LIMIT_AI_ENDPOINTS)
-def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
+def ai_analysis(request: Request, response: Response, analysis_request: AIAnalysisRequest):
     """
     Generate AI-powered analysis for a game using Claude or Grok.
 
@@ -1356,7 +1363,24 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         - Analysis saved to ai_analysis table for historical reference
     """
     try:
-        result = analyze_game(analysis_request.game_id, analysis_request.provider)
+        # Check in-memory TTL cache first to determine cache status for response header
+        cache_hit = False
+        if not analysis_request.force_refresh:
+            cached_result = ai_cache.get(
+                "ai_analysis",
+                game_id=analysis_request.game_id,
+                provider=analysis_request.provider,
+            )
+            if cached_result is not None:
+                cache_hit = True
+
+        result = analyzer.analyze(
+            analysis_request.game_id,
+            analysis_request.provider,
+            force_refresh=analysis_request.force_refresh,
+        )
+
+        response.headers["X-Cache"] = "HIT" if cache_hit else "MISS"
 
         return AIAnalysisResponse(
             game_id=analysis_request.game_id,
@@ -1366,6 +1390,7 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
             key_factors=result["key_factors"],
             reasoning=result["reasoning"],
             created_at=result.get("created_at"),
+            cached=cache_hit,
         )
 
     except ValueError as e:

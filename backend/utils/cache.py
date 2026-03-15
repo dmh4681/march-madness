@@ -272,6 +272,10 @@ class TTLCache:
 # TTL: 1 hour (3600 seconds)
 ratings_cache = TTLCache(default_ttl=3600)
 
+# Global cache instance for AI analysis results
+# TTL: 1 hour (3600 seconds) - analysis remains fresh for one hour before re-querying AI
+ai_cache = TTLCache(default_ttl=3600)
+
 
 def cached(
     prefix: str,
