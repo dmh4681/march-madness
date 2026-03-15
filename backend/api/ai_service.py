@@ -52,6 +52,7 @@ import hashlib
 import logging
 import time
 import random
+from datetime import datetime, timezone
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
@@ -67,6 +68,7 @@ from .supabase_client import (
     get_game_prediction_markets,
     get_game_arbitrage_opportunities,
     insert_ai_analysis,
+    get_ai_analysis_by_provider,
     get_tournament,
     get_tournament_game_data,
     upsert_bracket_pick,
@@ -80,6 +82,7 @@ try:
         grok_breaker,
         CircuitBreakerOpen,
     )
+    from backend.utils.cache import ai_cache
 except ImportError:
     from ..utils.retry import (
         _jitter_delay,
@@ -88,6 +91,7 @@ except ImportError:
         grok_breaker,
         CircuitBreakerOpen,
     )
+    from ..utils.cache import ai_cache
 
 load_dotenv()
 
@@ -1373,6 +1377,7 @@ def analyze_game(
     provider: AIProvider = "claude",
     save: bool = True,
     fallback_provider: bool = True,
+    force_refresh: bool = False,
 ) -> dict:
     """
     Run AI analysis on a game.
@@ -1382,10 +1387,38 @@ def analyze_game(
         provider: Which AI to use ("claude" or "grok")
         save: Whether to save the analysis to the database
         fallback_provider: If True and primary provider fails, try the other provider
+        force_refresh: If True, bypass all caches and call the AI API
 
     Returns:
         Analysis result dict
     """
+    # Level 1: Check in-memory TTL cache (fastest, zero DB cost)
+    if not force_refresh:
+        cached_result = ai_cache.get("ai_analysis", game_id=game_id, provider=provider)
+        if cached_result is not None:
+            logger.info(f"AI cache HIT (in-memory): game={game_id}, provider={provider}")
+            return cached_result
+
+        # Level 2: Check database for a recent analysis (persists across restarts)
+        try:
+            existing = get_ai_analysis_by_provider(game_id, provider)
+            if existing and existing.get("created_at"):
+                created = datetime.fromisoformat(
+                    existing["created_at"].replace("Z", "+00:00")
+                )
+                age_seconds = (datetime.now(timezone.utc) - created).total_seconds()
+                if age_seconds < 3600:  # 1 hour TTL
+                    logger.info(
+                        f"AI cache HIT (database): game={game_id}, provider={provider}, "
+                        f"age={age_seconds:.0f}s"
+                    )
+                    # Warm the in-memory cache so the next request is even faster
+                    ai_cache.set("ai_analysis", existing, game_id=game_id, provider=provider)
+                    return existing
+        except Exception as e:
+            # Cache miss on DB error — proceed with fresh AI call
+            logger.warning(f"DB cache lookup failed for game {game_id}: {e}")
+
     # Build context
     context = build_game_context(game_id)
 
@@ -1440,6 +1473,9 @@ def analyze_game(
         saved = insert_ai_analysis(analysis)
         analysis["id"] = saved["id"]
         analysis["created_at"] = saved["created_at"]
+
+    # Store in in-memory TTL cache for subsequent requests
+    ai_cache.set("ai_analysis", analysis, game_id=game_id, provider=provider)
 
     return analysis
 
@@ -1510,7 +1546,8 @@ class AIAnalyzer:
         game_id: str,
         provider: AIProvider = "claude",
         use_cache: bool = True,
-        save: bool = True
+        save: bool = True,
+        force_refresh: bool = False,
     ) -> dict:
         """
         Analyze a game with optional in-memory caching.
@@ -1523,16 +1560,17 @@ class AIAnalyzer:
             provider: AI provider ("claude" or "grok")
             use_cache: If True, return cached result if available
             save: If True, persist analysis to database
+            force_refresh: If True, bypass all caches and call the AI API
 
         Returns:
             Analysis result dict from analyze_game()
         """
         cache_key = f"{game_id}:{provider}"
 
-        if use_cache and cache_key in self.cache:
+        if use_cache and not force_refresh and cache_key in self.cache:
             return self.cache[cache_key]
 
-        result = analyze_game(game_id, provider, save)
+        result = analyze_game(game_id, provider, save, force_refresh=force_refresh)
         self.cache[cache_key] = result
 
         return result
