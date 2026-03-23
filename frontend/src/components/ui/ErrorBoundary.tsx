@@ -5,6 +5,7 @@ import { Component, type ReactNode } from 'react';
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  fallbackRender?: (props: { retry: () => void; error: Error }) => ReactNode;
   onError?: (error: Error, errorInfo: { componentStack: string }) => void;
 }
 
@@ -34,6 +35,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render(): ReactNode {
     if (this.state.hasError) {
+      if (this.props.fallbackRender && this.state.error) {
+        return this.props.fallbackRender({ retry: this.handleRetry, error: this.state.error });
+      }
+
       if (this.props.fallback) {
         return this.props.fallback;
       }

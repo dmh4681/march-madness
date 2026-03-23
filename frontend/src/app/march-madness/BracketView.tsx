@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useTransition, type ReactNode } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { formatSpread } from '@/lib/api';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import type {
   Tournament,
   BracketMatchup,
@@ -167,6 +168,38 @@ function MatchupRow({ matchup }: { matchup: BracketMatchup }) {
 }
 
 // ============================================
+// RegionCardErrorBoundary
+// ============================================
+
+function RegionCardErrorBoundary({ region, children }: { region: string; children: ReactNode }) {
+  return (
+    <ErrorBoundary
+      fallbackRender={({ retry }) => (
+        <div className="bg-gray-900 border border-red-500/20 rounded-lg overflow-hidden">
+          <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-800">
+            <h3 className="text-sm sm:text-base font-bold text-white uppercase tracking-wide">
+              {region}
+            </h3>
+          </div>
+          <div className="px-4 py-6 text-center">
+            <p className="text-sm text-red-400 mb-2">Failed to render {region} matchups</p>
+            <button
+              type="button"
+              onClick={retry}
+              className="text-xs text-orange-400 hover:text-orange-300 transition-colors"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      )}
+    >
+      {children}
+    </ErrorBoundary>
+  );
+}
+
+// ============================================
 // RegionCard
 // ============================================
 
@@ -319,6 +352,7 @@ export function BracketView({
 }: BracketViewProps) {
   const [selectedRegion, setSelectedRegion] = useState<TournamentRegion | 'All'>('All');
   const [selectedRound, setSelectedRound] = useState<TournamentRound | 'All'>('All');
+  const [isPending, startTransition] = useTransition();
 
   // Available rounds (only show tabs for rounds that exist)
   const availableRounds = useMemo(() => {
@@ -461,7 +495,7 @@ export function BracketView({
             <button
               key={region}
               type="button"
-              onClick={() => setSelectedRegion(region === 'All' ? 'All' : region)}
+              onClick={() => startTransition(() => setSelectedRegion(region === 'All' ? 'All' : region))}
               className={cn(
                 "px-4 py-2 min-h-[44px] text-sm font-medium rounded-lg shrink-0 transition-colors",
                 selectedRegion === region
@@ -481,7 +515,7 @@ export function BracketView({
           <div className="flex gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
             <button
               type="button"
-              onClick={() => setSelectedRound('All')}
+              onClick={() => startTransition(() => setSelectedRound('All'))}
               className={cn(
                 "px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-md shrink-0 transition-colors",
                 selectedRound === 'All'
@@ -495,7 +529,7 @@ export function BracketView({
               <button
                 key={round}
                 type="button"
-                onClick={() => setSelectedRound(round)}
+                onClick={() => startTransition(() => setSelectedRound(round))}
                 className={cn(
                   "px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-md shrink-0 transition-colors",
                   selectedRound === round
@@ -511,7 +545,7 @@ export function BracketView({
       )}
 
       {/* Main grid: sidebar + region cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+      <div className={cn("grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 transition-opacity duration-150", isPending && "opacity-50")}>
         {/* Seed sidebar - desktop only */}
         <div className="hidden lg:block lg:col-span-1">
           <div className="sticky top-[80px]">
@@ -525,32 +559,37 @@ export function BracketView({
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {matchupsByRegion.map(({ region, matchups: regionMatchups, seeds }) => (
-                  <RegionCard
-                    key={region}
-                    region={region}
-                    matchups={regionMatchups}
-                    seeds={seeds}
-                  />
+                  <RegionCardErrorBoundary key={region} region={region}>
+                    <RegionCard
+                      region={region}
+                      matchups={regionMatchups}
+                      seeds={seeds}
+                    />
+                  </RegionCardErrorBoundary>
                 ))}
               </div>
               {/* Cross-region games (Final Four / Championship) */}
               {crossRegionMatchups.length > 0 && (
                 <div className="mt-4">
-                  <RegionCard
-                    region={"Final Four" as TournamentRegion}
-                    matchups={crossRegionMatchups}
-                    seeds={[]}
-                  />
+                  <RegionCardErrorBoundary region="Final Four">
+                    <RegionCard
+                      region={"Final Four" as TournamentRegion}
+                      matchups={crossRegionMatchups}
+                      seeds={[]}
+                    />
+                  </RegionCardErrorBoundary>
                 </div>
               )}
             </>
           ) : (
             // Single region selected - full width
-            <RegionCard
-              region={selectedRegion as TournamentRegion}
-              matchups={filteredMatchups}
-              seeds={regionSeeds.filter(s => s.region === selectedRegion)}
-            />
+            <RegionCardErrorBoundary region={selectedRegion}>
+              <RegionCard
+                region={selectedRegion as TournamentRegion}
+                matchups={filteredMatchups}
+                seeds={regionSeeds.filter(s => s.region === selectedRegion)}
+              />
+            </RegionCardErrorBoundary>
           )}
 
           {filteredMatchups.length === 0 && (
