@@ -1175,6 +1175,83 @@ def grade_bracket_picks(tournament_id: str) -> dict:
     return {"graded": correct + incorrect, "correct": correct, "incorrect": incorrect}
 
 
+@timed_query("get_tournament_performance")
+def get_tournament_performance(season: int) -> dict:
+    """Get bracket pick performance broken down by round for a tournament season.
+
+    Returns overall totals plus per-round breakdown (correct/total/accuracy).
+    Only graded picks (is_correct is not null) are counted.
+    """
+    client = get_supabase()
+
+    # Get tournament id for the season
+    tournament = client.table("tournaments").select("id").eq("season", season).execute()
+    if not tournament.data:
+        return {"season": season, "tournament_found": False, "overall": {}, "by_round": []}
+
+    tournament_id = tournament.data[0]["id"]
+
+    # Fetch all graded picks with their round
+    picks = client.table("bracket_picks").select(
+        "round, is_correct"
+    ).eq("tournament_id", tournament_id).not_.is_("is_correct", "null").execute()
+
+    rows = picks.data or []
+
+    # Aggregate by round
+    round_stats: dict[str, dict] = {}
+    for pick in rows:
+        r = pick["round"]
+        if r not in round_stats:
+            round_stats[r] = {"correct": 0, "incorrect": 0}
+        if pick["is_correct"]:
+            round_stats[r]["correct"] += 1
+        else:
+            round_stats[r]["incorrect"] += 1
+
+    # Build ordered round list using canonical order
+    round_order = ["first_four", "round_64", "round_32", "sweet_16", "elite_8", "final_4", "championship"]
+    by_round = []
+    for r in round_order:
+        if r in round_stats:
+            s = round_stats[r]
+            total = s["correct"] + s["incorrect"]
+            by_round.append({
+                "round": r,
+                "correct": s["correct"],
+                "incorrect": s["incorrect"],
+                "total": total,
+                "accuracy": round(s["correct"] / total * 100, 1) if total > 0 else None,
+            })
+    # Append any rounds not in canonical order (future-proofing)
+    for r, s in round_stats.items():
+        if r not in round_order:
+            total = s["correct"] + s["incorrect"]
+            by_round.append({
+                "round": r,
+                "correct": s["correct"],
+                "incorrect": s["incorrect"],
+                "total": total,
+                "accuracy": round(s["correct"] / total * 100, 1) if total > 0 else None,
+            })
+
+    total_correct = sum(s["correct"] for s in round_stats.values())
+    total_picks = len(rows)
+    overall = {
+        "total_picks": total_picks,
+        "correct": total_correct,
+        "incorrect": total_picks - total_correct,
+        "accuracy": round(total_correct / total_picks * 100, 1) if total_picks > 0 else None,
+    }
+
+    return {
+        "season": season,
+        "tournament_found": True,
+        "overall": overall,
+        "by_round": by_round,
+    }
+
+
 @timed_query("update_eliminated_teams")
 def update_eliminated_teams(tournament_id: str) -> int:
     """Set eliminated_in_round for losing teams based on final game results."""

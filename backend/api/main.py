@@ -219,6 +219,7 @@ from .supabase_client import (
     upsert_bracket_pick,
     grade_bracket_picks,
     update_eliminated_teams,
+    get_tournament_performance,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
 
@@ -3659,6 +3660,61 @@ def grade_tournament(
         "incorrect": grade_result["incorrect"],
         "teams_eliminated": eliminated_count,
     })
+
+
+@app.get("/tournament/performance", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_tournament_performance_stats(
+    request: Request,
+    season: int = Query(..., ge=2000, le=2100, description="Tournament season year (e.g. 2025)"),
+):
+    """
+    Get bracket pick performance broken down by round for a tournament season.
+
+    Returns overall accuracy plus a per-round breakdown (correct picks, total picks,
+    accuracy percentage). Only graded picks are counted — picks where is_correct is
+    still NULL (unplayed games) are excluded.
+
+    Query Parameters:
+        season: Tournament season year (required)
+
+    Returns:
+        JSON with:
+        - season: int
+        - tournament_found: bool
+        - overall: { total_picks, correct, incorrect, accuracy }
+        - by_round: list of { round, correct, incorrect, total, accuracy }
+
+    Rounds are returned in canonical bracket order:
+        first_four → round_64 → round_32 → sweet_16 → elite_8 → final_4 → championship
+
+    Example Request:
+        GET /tournament/performance?season=2025
+
+    Example Response:
+        {
+            "season": 2025,
+            "tournament_found": true,
+            "overall": { "total_picks": 63, "correct": 41, "incorrect": 22, "accuracy": 65.1 },
+            "by_round": [
+                { "round": "round_64", "correct": 24, "incorrect": 8, "total": 32, "accuracy": 75.0 },
+                { "round": "round_32", "correct": 10, "incorrect": 6, "total": 16, "accuracy": 62.5 },
+                ...
+            ]
+        }
+
+    Rate Limit: 30 requests per minute per IP
+    """
+    try:
+        result = get_tournament_performance(season)
+        if not result["tournament_found"]:
+            raise NotFoundException(resource="Tournament", identifier=str(season))
+        return result
+    except NotFoundException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching tournament performance for season {season}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Unable to fetch tournament performance. Please try again later.")
 
 
 @app.post("/tournament/ai-analysis", response_model=TournamentAIAnalysisResponse, tags=["Tournament"])

@@ -1,9 +1,40 @@
 import Link from 'next/link';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { PerformanceStats } from '@/components/PerformanceStats';
+import { TournamentPerformance } from '@/components/TournamentPerformance';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
+
+interface TournamentRoundStat {
+  round: string;
+  correct: number;
+  incorrect: number;
+  total: number;
+  accuracy: number | null;
+}
+
+interface TournamentPerformanceData {
+  season: number;
+  tournament_found: boolean;
+  overall: { total_picks: number; correct: number; incorrect: number; accuracy: number | null };
+  by_round: TournamentRoundStat[];
+}
+
+async function getTournamentPerformance(season: number): Promise<TournamentPerformanceData | null> {
+  if (!API_URL) return null;
+  try {
+    const res = await fetch(`${API_URL}/tournament/performance?season=${season}`, {
+      next: { revalidate: 300 },
+    });
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
 
 async function getPerformanceData() {
   if (!isSupabaseConfigured()) {
@@ -47,7 +78,11 @@ async function getPerformanceData() {
 }
 
 export default async function PerformancePage() {
-  const { betResults, seasonPerformance } = await getPerformanceData();
+  const currentYear = new Date().getFullYear();
+  const [{ betResults, seasonPerformance }, tournamentPerf] = await Promise.all([
+    getPerformanceData(),
+    getTournamentPerformance(currentYear),
+  ]);
   const isDemo = !isSupabaseConfigured();
 
   return (
@@ -113,6 +148,12 @@ export default async function PerformancePage() {
         </div>
 
         <PerformanceStats betResults={betResults} seasonPerformance={seasonPerformance} />
+
+        {tournamentPerf && tournamentPerf.tournament_found && (
+          <div className="mt-8">
+            <TournamentPerformance data={tournamentPerf} />
+          </div>
+        )}
       </main>
 
       {/* Footer */}
