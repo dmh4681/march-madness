@@ -4,6 +4,8 @@ import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { formatSpread } from '@/lib/api';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { RegionCardSkeleton, RegionSeedSidebarSkeleton } from '@/components/ui/skeleton';
 import type {
   Tournament,
   BracketMatchup,
@@ -515,7 +517,9 @@ export function BracketView({
         {/* Seed sidebar - desktop only */}
         <div className="hidden lg:block lg:col-span-1">
           <div className="sticky top-[80px]">
-            <RegionSeedSidebar regionSeeds={regionSeeds} />
+            <ErrorBoundary fallback={<RegionSeedSidebarSkeleton />}>
+              <RegionSeedSidebar regionSeeds={regionSeeds} />
+            </ErrorBoundary>
           </div>
         </div>
 
@@ -525,32 +529,37 @@ export function BracketView({
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {matchupsByRegion.map(({ region, matchups: regionMatchups, seeds }) => (
-                  <RegionCard
-                    key={region}
-                    region={region}
-                    matchups={regionMatchups}
-                    seeds={seeds}
-                  />
+                  <ErrorBoundary key={region} fallback={<RegionCardSkeleton matchupCount={seeds.length > 0 ? Math.min(seeds.length, 4) : 4} />}>
+                    <RegionCard
+                      region={region}
+                      matchups={regionMatchups}
+                      seeds={seeds}
+                    />
+                  </ErrorBoundary>
                 ))}
               </div>
               {/* Cross-region games (Final Four / Championship) */}
               {crossRegionMatchups.length > 0 && (
                 <div className="mt-4">
-                  <RegionCard
-                    region={"Final Four" as TournamentRegion}
-                    matchups={crossRegionMatchups}
-                    seeds={[]}
-                  />
+                  <ErrorBoundary fallback={<RegionCardSkeleton matchupCount={crossRegionMatchups.length} />}>
+                    <RegionCard
+                      region={"Final Four" as TournamentRegion}
+                      matchups={crossRegionMatchups}
+                      seeds={[]}
+                    />
+                  </ErrorBoundary>
                 </div>
               )}
             </>
           ) : (
             // Single region selected - full width
-            <RegionCard
-              region={selectedRegion as TournamentRegion}
-              matchups={filteredMatchups}
-              seeds={regionSeeds.filter(s => s.region === selectedRegion)}
-            />
+            <ErrorBoundary fallback={<RegionCardSkeleton matchupCount={4} />}>
+              <RegionCard
+                region={selectedRegion as TournamentRegion}
+                matchups={filteredMatchups}
+                seeds={regionSeeds.filter(s => s.region === selectedRegion)}
+              />
+            </ErrorBoundary>
           )}
 
           {filteredMatchups.length === 0 && (
