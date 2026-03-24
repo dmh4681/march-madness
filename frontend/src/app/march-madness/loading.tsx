@@ -1,3 +1,5 @@
+import { RegionCardSkeleton, RegionSeedSidebarSkeleton } from '@/components/ui/skeleton';
+
 export default function MarchMadnessLoading() {
   return (
     <div className="min-h-screen bg-black text-white">
@@ -30,43 +32,21 @@ export default function MarchMadnessLoading() {
         {/* Region filter tabs skeleton */}
         <div className="flex gap-2 mb-4">
           {['All', 'East', 'West', 'South', 'Midwest'].map((r) => (
-            <div key={r} className="h-10 w-20 bg-gray-800 rounded-lg animate-pulse" />
+            <div key={r} className="h-11 w-20 bg-gray-800 rounded-lg animate-pulse" />
           ))}
         </div>
 
-        {/* Region cards skeleton */}
+        {/* Main grid: sidebar + region cards */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-          {/* Seed sidebar skeleton */}
+          {/* Seed sidebar skeleton - desktop only */}
           <div className="hidden lg:block lg:col-span-1">
-            <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-              <div className="h-5 w-32 bg-gray-800 rounded animate-pulse mb-4" />
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i} className="h-10 bg-gray-800/50 rounded animate-pulse mb-2" />
-              ))}
-            </div>
+            <RegionSeedSidebarSkeleton />
           </div>
 
           {/* Region cards skeleton */}
           <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-                <div className="px-4 py-3 border-b border-gray-800 flex items-center justify-between">
-                  <div className="h-5 w-20 bg-gray-800 rounded animate-pulse" />
-                  <div className="h-4 w-16 bg-gray-800 rounded animate-pulse" />
-                </div>
-                <div className="divide-y divide-gray-800">
-                  {[1, 2, 3, 4].map((j) => (
-                    <div key={j} className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="h-4 w-6 bg-gray-800 rounded animate-pulse" />
-                        <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
-                        <div className="h-4 w-6 bg-gray-800/50 rounded animate-pulse" />
-                        <div className="h-4 w-24 bg-gray-800 rounded animate-pulse" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <RegionCardSkeleton key={i} matchupCount={4} />
             ))}
           </div>
         </div>

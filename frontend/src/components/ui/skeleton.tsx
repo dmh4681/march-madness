@@ -127,6 +127,57 @@ export function AIAnalysisSkeleton() {
   );
 }
 
+// Skeleton for a single tournament matchup row
+export function MatchupRowSkeleton() {
+  return (
+    <div className="px-3 sm:px-4 py-3 border-b border-gray-800 last:border-0">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <Skeleton className="h-3 w-6 sm:w-8 shrink-0" />
+          <Skeleton className="h-4 w-20 sm:w-28" />
+          <Skeleton className="h-3 w-4 shrink-0" />
+          <Skeleton className="h-4 w-20 sm:w-28" />
+        </div>
+        <Skeleton className="h-4 w-10 shrink-0" />
+      </div>
+    </div>
+  );
+}
+
+// Skeleton for a tournament region card (header + 4 matchup rows)
+export function RegionCardSkeleton({ matchupCount = 4 }: { matchupCount?: number }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-800 flex items-center justify-between">
+        <Skeleton className="h-4 w-20" />
+        <Skeleton className="h-3 w-16" />
+      </div>
+      <div>
+        {Array.from({ length: matchupCount }).map((_, i) => (
+          <MatchupRowSkeleton key={i} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Skeleton for the tournament seed sidebar
+export function RegionSeedSidebarSkeleton() {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-800">
+        <Skeleton className="h-4 w-36" />
+      </div>
+      {[1, 2, 3, 4].map((i) => (
+        <div key={i} className="border-b border-gray-800 last:border-0 px-4 py-2.5 flex items-center justify-between min-h-[44px]">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-3 w-14" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Skeleton for compare view
 export function AICompareViewSkeleton() {
   return (
