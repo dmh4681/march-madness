@@ -52,6 +52,7 @@ import hashlib
 import logging
 import time
 import random
+from datetime import datetime, timezone
 from typing import Optional, Literal
 
 from dotenv import load_dotenv
@@ -67,6 +68,7 @@ from .supabase_client import (
     get_game_prediction_markets,
     get_game_arbitrage_opportunities,
     insert_ai_analysis,
+    get_ai_analysis_by_provider,
     get_tournament,
     get_tournament_game_data,
     upsert_bracket_pick,
@@ -89,7 +91,23 @@ except ImportError:
         CircuitBreakerOpen,
     )
 
+try:
+    from backend.utils.cache import TTLCache
+except ImportError:
+    from ..utils.cache import TTLCache
+
 load_dotenv()
+
+# =============================================================================
+# AI Analysis Cache
+# =============================================================================
+# L1 in-memory cache for AI analysis results.
+# TTL: 6 hours — long enough to avoid redundant AI calls within a session,
+# short enough that stale spreads/line moves don't persist too long.
+# The database (ai_analysis table) serves as the L2 persistent cache.
+ANALYSIS_CACHE_TTL_SECONDS = 6 * 3600  # 6 hours
+
+ai_analysis_cache = TTLCache(default_ttl=ANALYSIS_CACHE_TTL_SECONDS)
 
 logger = logging.getLogger(__name__)
 
@@ -1373,19 +1391,95 @@ def analyze_game(
     provider: AIProvider = "claude",
     save: bool = True,
     fallback_provider: bool = True,
+    force: bool = False,
 ) -> dict:
     """
-    Run AI analysis on a game.
+    Run AI analysis on a game, with a two-level cache hierarchy.
+
+    Cache Strategy (skipped entirely when force=True):
+        L1 — In-memory TTLCache (ai_analysis_cache): fast, per-process, 6-hour TTL.
+             Prevents redundant AI calls within a single server session.
+        L2 — Database (ai_analysis table): persistent, shared across workers.
+             Checked when L1 misses; re-populates L1 on hit.
+             Only used if the stored analysis is < 6 hours old.
+        L3 — Live AI API call: runs only when both caches miss or force=True.
 
     Args:
         game_id: The game UUID
         provider: Which AI to use ("claude" or "grok")
-        save: Whether to save the analysis to the database
+        save: Whether to save fresh analysis to the database (ignored on cache hits)
         fallback_provider: If True and primary provider fails, try the other provider
+        force: If True, bypass all caches and always call the AI API
 
     Returns:
-        Analysis result dict
+        Analysis result dict. Includes "from_cache": True when served from L1/L2.
     """
+    # ------------------------------------------------------------------
+    # L1: In-memory cache
+    # ------------------------------------------------------------------
+    if not force:
+        cached = ai_analysis_cache.get("ai_analysis", game_id=game_id, provider=provider)
+        if cached is not None:
+            logger.debug(f"Cache L1 HIT: game={game_id} provider={provider}")
+            result = dict(cached)
+            result["from_cache"] = True
+            return result
+
+    # ------------------------------------------------------------------
+    # L2: Database cache (ai_analysis table)
+    # ------------------------------------------------------------------
+    if not force:
+        try:
+            db_analysis = get_ai_analysis_by_provider(game_id, provider)
+            if db_analysis is not None:
+                created_at_str = db_analysis.get("created_at")
+                if created_at_str:
+                    try:
+                        created_at = datetime.fromisoformat(
+                            created_at_str.replace("Z", "+00:00")
+                        )
+                        age_seconds = (
+                            datetime.now(timezone.utc) - created_at
+                        ).total_seconds()
+                        if age_seconds < ANALYSIS_CACHE_TTL_SECONDS:
+                            logger.info(
+                                f"Cache L2 HIT: game={game_id} provider={provider} "
+                                f"age={age_seconds/3600:.1f}h"
+                            )
+                            # Ensure key_factors is a list (Supabase may return JSON string)
+                            if isinstance(db_analysis.get("key_factors"), str):
+                                try:
+                                    db_analysis["key_factors"] = json.loads(
+                                        db_analysis["key_factors"]
+                                    )
+                                except (json.JSONDecodeError, TypeError):
+                                    db_analysis["key_factors"] = [db_analysis["key_factors"]]
+                            db_analysis["from_cache"] = True
+                            # Populate L1 so next request is even faster
+                            ai_analysis_cache.set(
+                                "ai_analysis",
+                                db_analysis,
+                                ttl=max(0, int(ANALYSIS_CACHE_TTL_SECONDS - age_seconds)),
+                                game_id=game_id,
+                                provider=provider,
+                            )
+                            return db_analysis
+                        else:
+                            logger.info(
+                                f"Cache L2 STALE: game={game_id} provider={provider} "
+                                f"age={age_seconds/3600:.1f}h — running fresh analysis"
+                            )
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Cache L2: could not parse created_at '{created_at_str}': {e}")
+        except Exception as e:
+            # Don't let a cache lookup failure block a fresh AI call
+            logger.warning(f"Cache L2: DB lookup failed for game={game_id}: {_sanitize_error_message(str(e))}")
+
+    # ------------------------------------------------------------------
+    # L3: Live AI API call
+    # ------------------------------------------------------------------
+    logger.info(f"Cache MISS: calling AI API — game={game_id} provider={provider} force={force}")
+
     # Build context
     context = build_game_context(game_id)
 
@@ -1434,12 +1528,22 @@ def analyze_game(
 
     # Add game_id to analysis
     analysis["game_id"] = game_id
+    analysis["from_cache"] = False
 
-    # Save to database
+    # Save to database (L2 cache + permanent record)
     if save:
         saved = insert_ai_analysis(analysis)
         analysis["id"] = saved["id"]
         analysis["created_at"] = saved["created_at"]
+
+    # Populate L1 cache so subsequent requests in this process skip the DB lookup
+    ai_analysis_cache.set(
+        "ai_analysis",
+        analysis,
+        ttl=ANALYSIS_CACHE_TTL_SECONDS,
+        game_id=game_id,
+        provider=provider,
+    )
 
     return analysis
 
@@ -1510,29 +1614,32 @@ class AIAnalyzer:
         game_id: str,
         provider: AIProvider = "claude",
         use_cache: bool = True,
-        save: bool = True
+        save: bool = True,
+        force: bool = False,
     ) -> dict:
         """
         Analyze a game with optional in-memory caching.
 
-        Cache key format: "{game_id}:{provider}" to allow separate
-        cached results for Claude and Grok on the same game.
+        Delegates to analyze_game() which implements a full L1/L2/L3 cache
+        hierarchy. This instance-level dict cache acts as an additional L0
+        layer for the lifetime of this AIAnalyzer object.
 
         Args:
             game_id: UUID of the game to analyze
             provider: AI provider ("claude" or "grok")
-            use_cache: If True, return cached result if available
+            use_cache: If True, check instance-level cache before delegating
             save: If True, persist analysis to database
+            force: If True, bypass all caches including L1/L2 in analyze_game()
 
         Returns:
             Analysis result dict from analyze_game()
         """
         cache_key = f"{game_id}:{provider}"
 
-        if use_cache and cache_key in self.cache:
+        if use_cache and not force and cache_key in self.cache:
             return self.cache[cache_key]
 
-        result = analyze_game(game_id, provider, save)
+        result = analyze_game(game_id, provider, save, force=force)
         self.cache[cache_key] = result
 
         return result

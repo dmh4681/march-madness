@@ -220,7 +220,7 @@ from .supabase_client import (
     grade_bracket_picks,
     update_eliminated_teams,
 )
-from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
+from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game, ai_analysis_cache, ANALYSIS_CACHE_TTL_SECONDS
 
 
 # =============================================================================
@@ -720,6 +720,10 @@ class AIAnalysisRequest(BaseModel):
         default="claude",
         description="AI provider: 'claude' (Anthropic Claude Sonnet 4) or 'grok' (xAI Grok-3)"
     )
+    force: bool = Field(
+        default=False,
+        description="If true, bypass all caches and run a fresh AI analysis regardless of age."
+    )
 
     @field_validator('game_id')
     @classmethod
@@ -767,6 +771,7 @@ class AIAnalysisResponse(BaseModel):
     key_factors: list[str] = Field(description="3-5 key factors driving the recommendation")
     reasoning: str = Field(description="2-3 sentence explanation of the analysis")
     created_at: Optional[str] = Field(default=None, description="ISO timestamp when analysis was created")
+    from_cache: bool = Field(default=False, description="True if this response was served from cache (L1 memory or L2 database); False if a fresh AI call was made.")
 
 
 class StatsResponse(BaseModel):
@@ -1356,7 +1361,11 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         - Analysis saved to ai_analysis table for historical reference
     """
     try:
-        result = analyze_game(analysis_request.game_id, analysis_request.provider)
+        result = analyze_game(
+            analysis_request.game_id,
+            analysis_request.provider,
+            force=analysis_request.force,
+        )
 
         return AIAnalysisResponse(
             game_id=analysis_request.game_id,
@@ -1366,6 +1375,7 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
             key_factors=result["key_factors"],
             reasoning=result["reasoning"],
             created_at=result.get("created_at"),
+            from_cache=result.get("from_cache", False),
         )
 
     except ValueError as e:
@@ -1382,6 +1392,52 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
             service=f"AI/{analysis_request.provider}",
             message="AI analysis failed. Please try again later."
         )
+
+
+@app.get("/cache/stats", tags=["AI Analysis"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def cache_stats(request: Request):
+    """
+    Return AI analysis cache statistics.
+
+    Reports hit/miss counts and hit rate for the in-memory L1 cache.
+    Useful for monitoring cache effectiveness and diagnosing performance.
+
+    Returns:
+        Dict with hits, misses, hit_rate_pct, invalidations, current_entries,
+        and the configured TTL in hours.
+    """
+    stats = ai_analysis_cache.get_stats()
+    stats["ttl_hours"] = ANALYSIS_CACHE_TTL_SECONDS / 3600
+    return success_response(data=stats)
+
+
+@app.delete("/cache/invalidate/{game_id}", tags=["AI Analysis"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def cache_invalidate(request: Request, game_id: str = Path(..., description="Game UUID to evict from the AI analysis cache")):
+    """
+    Evict a game's AI analysis entries from the in-memory L1 cache.
+
+    Useful after a significant line move or data refresh — forces the next
+    request to re-check the database (L2) or run a fresh AI call (L3).
+    Does NOT delete rows from the ai_analysis database table.
+
+    Args:
+        game_id: UUID of the game to evict
+
+    Returns:
+        Number of cache entries removed
+    """
+    if not UUID_PATTERN.match(game_id):
+        raise ValidationException(
+            message="game_id must be a valid UUID",
+            details={"game_id": game_id},
+        )
+    # Key format: "ai_analysis:game_id=<uuid>:provider=<claude|grok>"
+    # Using the game_id prefix removes both claude and grok entries for that game.
+    removed = ai_analysis_cache.invalidate(f"ai_analysis:game_id={game_id}")
+    logger.info(f"Cache invalidated for game={game_id}: {removed} entries removed")
+    return success_response(data={"game_id": game_id, "entries_removed": removed})
 
 
 @app.get("/today", tags=["Games"])
