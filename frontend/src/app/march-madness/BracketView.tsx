@@ -84,51 +84,60 @@ function MatchupRow({ matchup }: { matchup: BracketMatchup }) {
   const homeWon = isFinal && (matchup.home_score ?? 0) > (matchup.away_score ?? 0);
   const awayWon = isFinal && (matchup.away_score ?? 0) > (matchup.home_score ?? 0);
 
+  const roundLabel = ROUND_LABELS[matchup.tournament_round] ?? matchup.tournament_round;
+
   return (
     <Link
       href={`/games/${matchup.game_id}`}
       className="block px-3 sm:px-4 py-3 hover:bg-gray-800/50 transition-colors border-b border-gray-800 last:border-0"
     >
-      {/* Line 1: Teams + Score */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 min-w-0 flex-1">
-          {/* Round badge */}
-          <span className="text-[10px] sm:text-xs text-gray-500 font-medium w-6 sm:w-8 shrink-0">
-            {ROUND_LABELS[matchup.tournament_round] ?? matchup.tournament_round}
+      {/* Teams stacked vertically — prevents overflow on narrow screens */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-1.5 min-w-0 flex-1">
+          {/* Round badge — aligned to first team line */}
+          <span className="text-[10px] sm:text-xs text-gray-500 font-medium w-6 sm:w-8 shrink-0 pt-0.5">
+            {roundLabel}
           </span>
-          {/* Home team */}
-          <span className={cn(
-            "text-xs sm:text-sm font-medium truncate",
-            homeWon ? "text-green-400" : "text-white"
-          )}>
-            {matchup.home_seed != null && (
-              <span className="text-gray-500 mr-0.5">#{matchup.home_seed}</span>
-            )}
-            {matchup.home_team}
-          </span>
-          <span className="text-gray-600 text-xs shrink-0">vs</span>
-          {/* Away team */}
-          <span className={cn(
-            "text-xs sm:text-sm font-medium truncate",
-            awayWon ? "text-green-400" : "text-white"
-          )}>
-            {matchup.away_seed != null && (
-              <span className="text-gray-500 mr-0.5">#{matchup.away_seed}</span>
-            )}
-            {matchup.away_team}
-          </span>
+          {/* Teams stacked */}
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className={cn(
+              "text-xs sm:text-sm font-medium truncate",
+              homeWon ? "text-green-400" : "text-white"
+            )}>
+              {matchup.home_seed != null && (
+                <span className="text-gray-500 mr-0.5">#{matchup.home_seed}</span>
+              )}
+              {matchup.home_team}
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-gray-600 text-[10px]">vs</span>
+            </div>
+            <div className={cn(
+              "text-xs sm:text-sm font-medium truncate",
+              awayWon ? "text-green-400" : "text-white"
+            )}>
+              {matchup.away_seed != null && (
+                <span className="text-gray-500 mr-0.5">#{matchup.away_seed}</span>
+              )}
+              {matchup.away_team}
+            </div>
+          </div>
         </div>
 
-        {/* Score or status */}
-        <div className="shrink-0 text-right">
+        {/* Score or status — stacked to match team rows */}
+        <div className="shrink-0 text-right space-y-1 pt-0.5">
           {isFinal ? (
-            <span className="text-xs sm:text-sm text-gray-300 font-mono">
-              <span className={homeWon ? "text-green-400" : ""}>{matchup.home_score}</span>
-              <span className="text-gray-600 mx-0.5">-</span>
-              <span className={awayWon ? "text-green-400" : ""}>{matchup.away_score}</span>
-            </span>
+            <>
+              <div className={cn("text-xs sm:text-sm font-mono", homeWon ? "text-green-400" : "text-gray-300")}>
+                {matchup.home_score}
+              </div>
+              <div className="h-3" /> {/* spacer for "vs" row */}
+              <div className={cn("text-xs sm:text-sm font-mono", awayWon ? "text-green-400" : "text-gray-300")}>
+                {matchup.away_score}
+              </div>
+            </>
           ) : matchup.game_status === 'in_progress' ? (
-            <span className="text-xs text-orange-400">Live</span>
+            <span className="text-xs text-orange-400 font-medium">Live</span>
           ) : (
             matchup.home_spread != null && (
               <span className="text-xs text-gray-500">{formatSpread(matchup.home_spread)}</span>
@@ -137,28 +146,28 @@ function MatchupRow({ matchup }: { matchup: BracketMatchup }) {
         </div>
       </div>
 
-      {/* Line 2: Pick indicator */}
+      {/* Pick indicator */}
       {matchup.picked_team && (
-        <div className="flex items-center gap-1.5 mt-1 ml-7 sm:ml-9">
+        <div className="flex items-center gap-1.5 mt-1.5 ml-7 sm:ml-9">
           <span className="text-[10px] sm:text-xs text-gray-500">Pick:</span>
-          <span className="text-xs text-gray-300">{matchup.picked_team}</span>
+          <span className="text-xs text-gray-300 truncate">{matchup.picked_team}</span>
           {matchup.is_correct === true && (
-            <svg className="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className="w-3.5 h-3.5 text-green-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
           )}
           {matchup.is_correct === false && (
-            <svg className="w-3.5 h-3.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <svg className="w-3.5 h-3.5 text-red-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           )}
           {matchup.is_correct === null && (
-            <svg className="w-3.5 h-3.5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-3.5 h-3.5 text-yellow-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           )}
           {matchup.pick_confidence != null && (
-            <span className="text-[10px] text-gray-500">{Math.round(matchup.pick_confidence * 100)}%</span>
+            <span className="text-[10px] text-gray-500 shrink-0">{Math.round(matchup.pick_confidence * 100)}%</span>
           )}
         </div>
       )}
@@ -512,15 +521,15 @@ export function BracketView({
 
       {/* Main grid: sidebar + region cards */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-        {/* Seed sidebar - desktop only */}
-        <div className="hidden lg:block lg:col-span-1">
-          <div className="sticky top-[80px]">
+        {/* Seed sidebar — sticky on desktop, below matchups on mobile */}
+        <div className="lg:col-span-1 order-2 lg:order-1">
+          <div className="lg:sticky lg:top-[80px]">
             <RegionSeedSidebar regionSeeds={regionSeeds} />
           </div>
         </div>
 
         {/* Region cards */}
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 order-1 lg:order-2">
           {selectedRegion === 'All' ? (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
