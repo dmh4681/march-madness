@@ -92,9 +92,11 @@ import { InfoTooltip, BETTING_TERMS } from './Tooltip';
 interface GameCardProps {
   game: TodayGame;
   showPrediction?: boolean;
+  /** When false, omits card background/border (used when nested inside GameCardWithAnalytics) */
+  standalone?: boolean;
 }
 
-export const GameCard = memo(function GameCard({ game, showPrediction = true }: GameCardProps) {
+export const GameCard = memo(function GameCard({ game, showPrediction = true, standalone = true }: GameCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const predictionId = useId();
   const oddsId = useId();
@@ -170,7 +172,12 @@ export const GameCard = memo(function GameCard({ game, showPrediction = true }: 
 
   return (
     <article
-      className="bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-700 transition-colors"
+      className={cn(
+        "transition-colors",
+        standalone
+          ? "bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-700"
+          : "hover:bg-gray-800/30"
+      )}
       aria-label={gameDescription}
     >
       {/* Main card content - links to detail page */}
@@ -278,53 +285,55 @@ export const GameCard = memo(function GameCard({ game, showPrediction = true }: 
             id={predictionId}
             role="region"
             aria-label="Betting prediction"
-            className="flex items-center justify-between flex-wrap gap-2 min-h-[44px] sm:min-h-0"
+            className="min-h-[44px] sm:min-h-0"
           >
-            <div className="flex items-center gap-2">
-              {/* Confidence badge with inline help */}
-              <span className="flex items-center gap-1">
-                <ConfidenceBadge tier={game.confidence_tier} size="touch" />
-                <InfoTooltip
-                  content={BETTING_TERMS.confidence.content}
-                  helpLink={BETTING_TERMS.confidence.helpLink}
-                  position="bottom"
-                />
-              </span>
-              {/* Recommended bet display */}
-              {game.recommended_bet && game.recommended_bet !== 'pass' && (
-                <span
-                  className="text-sm font-medium text-white truncate max-w-[150px] sm:max-w-none"
-                  aria-label={`Recommended bet: ${
-                    game.recommended_bet.includes('home') ? game.home_team : game.away_team
-                  } ${game.recommended_bet.includes('spread') ? 'spread' : 'moneyline'}`}
-                >
-                  {game.recommended_bet.includes('home')
-                    ? game.home_team
-                    : game.away_team}{' '}
-                  {game.recommended_bet.includes('spread') ? formatSpread(
-                    game.recommended_bet.includes('home')
-                      ? game.home_spread
-                      : game.home_spread ? -game.home_spread : null
-                  ) : 'ML'}
+            <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-1">
+              <div className="flex items-center gap-2 min-w-0">
+                {/* Confidence badge with inline help */}
+                <span className="flex items-center gap-1 shrink-0">
+                  <ConfidenceBadge tier={game.confidence_tier} size="touch" />
+                  <InfoTooltip
+                    content={BETTING_TERMS.confidence.content}
+                    helpLink={BETTING_TERMS.confidence.helpLink}
+                    position="bottom"
+                  />
+                </span>
+                {/* Recommended bet display */}
+                {game.recommended_bet && game.recommended_bet !== 'pass' && (
+                  <span
+                    className="text-sm font-medium text-white truncate"
+                    aria-label={`Recommended bet: ${
+                      game.recommended_bet.includes('home') ? game.home_team : game.away_team
+                    } ${game.recommended_bet.includes('spread') ? 'spread' : 'moneyline'}`}
+                  >
+                    {game.recommended_bet.includes('home')
+                      ? game.home_team
+                      : game.away_team}{' '}
+                    {game.recommended_bet.includes('spread') ? formatSpread(
+                      game.recommended_bet.includes('home')
+                        ? game.home_spread
+                        : game.home_spread ? -game.home_spread : null
+                    ) : 'ML'}
+                  </span>
+                )}
+              </div>
+              {/* Edge display with tooltip explaining what edge means */}
+              {game.edge_pct && game.edge_pct > 0 && (
+                <span className="flex items-center gap-1 shrink-0">
+                  <span
+                    className="text-sm text-green-400"
+                    aria-label={`${game.edge_pct.toFixed(1)} percent edge`}
+                  >
+                    +{game.edge_pct.toFixed(1)}% edge
+                  </span>
+                  <InfoTooltip
+                    content={BETTING_TERMS.edge.content}
+                    helpLink={BETTING_TERMS.edge.helpLink}
+                    position="left"
+                  />
                 </span>
               )}
             </div>
-            {/* Edge display with tooltip explaining what edge means */}
-            {game.edge_pct && game.edge_pct > 0 && (
-              <span className="flex items-center gap-1 shrink-0">
-                <span
-                  className="text-sm text-green-400"
-                  aria-label={`${game.edge_pct.toFixed(1)} percent edge`}
-                >
-                  +{game.edge_pct.toFixed(1)}% edge
-                </span>
-                <InfoTooltip
-                  content={BETTING_TERMS.edge.content}
-                  helpLink={BETTING_TERMS.edge.helpLink}
-                  position="left"
-                />
-              </span>
-            )}
           </div>
         )}
 
@@ -581,8 +590,8 @@ function AnalyticsSection({ gameId }: { gameId: string }) {
 // Extended GameCard with analytics section
 export function GameCardWithAnalytics({ game, showPrediction = true }: GameCardProps) {
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-700 transition-colors">
-      <GameCard game={game} showPrediction={showPrediction} />
+    <div className="bg-gray-900 border border-gray-800 rounded-lg hover:border-gray-700 transition-colors overflow-hidden">
+      <GameCard game={game} showPrediction={showPrediction} standalone={false} />
       <AnalyticsSection gameId={game.id} />
     </div>
   );
