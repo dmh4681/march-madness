@@ -220,7 +220,7 @@ from .supabase_client import (
     grade_bracket_picks,
     update_eliminated_teams,
 )
-from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
+from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game, AITimeoutError
 
 
 # =============================================================================
@@ -1355,6 +1355,13 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
         - Prediction market data influences confidence on large deltas
         - Analysis saved to ai_analysis table for historical reference
     """
+    # Check provider availability upfront — fail fast with a clear 503
+    claude_available, grok_available = check_ai_provider_available()
+    if analysis_request.provider == "claude" and not claude_available:
+        raise AIServiceException(provider="claude")
+    if analysis_request.provider == "grok" and not grok_available:
+        raise AIServiceException(provider="grok")
+
     try:
         result = analyze_game(analysis_request.game_id, analysis_request.provider)
 
@@ -1368,6 +1375,8 @@ def ai_analysis(request: Request, analysis_request: AIAnalysisRequest):
             created_at=result.get("created_at"),
         )
 
+    except AITimeoutError as e:
+        raise AnalysisTimeoutException(provider=e.provider)
     except ValueError as e:
         # ValueError is user-input related, return sanitized message
         error_msg = str(e)[:100]  # Truncate long error messages
@@ -3691,6 +3700,13 @@ def tournament_ai_analysis(request: Request, body: TournamentAIAnalysisRequest):
         POST /tournament/ai-analysis
         {"game_id": "123e4567-e89b-12d3-a456-426614174000", "provider": "claude"}
     """
+    # Check provider availability upfront — fail fast with a clear 503
+    claude_available, grok_available = check_ai_provider_available()
+    if body.provider == "claude" and not claude_available:
+        raise AIServiceException(provider="claude")
+    if body.provider == "grok" and not grok_available:
+        raise AIServiceException(provider="grok")
+
     try:
         result = analyze_tournament_game(body.game_id, body.provider)
 
@@ -3715,6 +3731,8 @@ def tournament_ai_analysis(request: Request, body: TournamentAIAnalysisRequest):
             created_at=result.get("created_at"),
         )
 
+    except AITimeoutError as e:
+        raise AnalysisTimeoutException(provider=e.provider)
     except ValueError as e:
         error_msg = str(e)[:200]
         if "not found in tournament_bracket" in error_msg:

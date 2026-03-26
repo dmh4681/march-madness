@@ -105,6 +105,19 @@ grok_client = OpenAI(api_key=GROK_API_KEY, base_url=GROK_BASE_URL, timeout=AI_TI
 
 AIProvider = Literal["claude", "grok"]
 
+# UUID pattern for service-layer validation (guards DB calls from malformed IDs)
+_UUID_PATTERN = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
+
+
+class AITimeoutError(Exception):
+    """Raised when an AI provider times out after all retry attempts."""
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        super().__init__(f"AI provider '{provider}' timed out after all retry attempts")
+
 
 # =============================================================================
 # SECURITY: Error Message Sanitization
@@ -278,6 +291,8 @@ def build_game_context(game_id: str) -> dict:
     Raises:
         ValueError: If game_id doesn't exist in database
     """
+    if not _UUID_PATTERN.match(game_id):
+        raise ValueError(f"Invalid game_id format: '{game_id}'. Must be a UUID.")
     game = get_game_by_id(game_id)
     if not game:
         raise ValueError(f"Game not found: {game_id}")
@@ -1009,9 +1024,15 @@ def analyze_tournament_game(
         bet_key_factors, bet_reasoning, created_at
 
     Raises:
-        ValueError: If game_id is not a tournament game or provider is invalid
-        RuntimeError: If AI call fails after retries
+        ValueError: If game_id is not a valid UUID, not a tournament game, or provider is invalid
+        AITimeoutError: If the AI provider times out after all retry attempts
+        RuntimeError: If AI call fails after retries on both providers
     """
+    if not _UUID_PATTERN.match(game_id):
+        raise ValueError(f"Invalid game_id format: '{game_id}'. Must be a UUID.")
+    if tournament_id is not None and not _UUID_PATTERN.match(tournament_id):
+        raise ValueError(f"Invalid tournament_id format: '{tournament_id}'. Must be a UUID.")
+
     # 1. Fetch tournament bracket data for this game
     tournament_game = get_tournament_game_data(game_id)
     if not tournament_game:
@@ -1046,42 +1067,119 @@ def analyze_tournament_game(
     prompt = build_combined_tournament_prompt(context, matchup_metadata)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
-    # 5. Call AI provider with retries
-    response_text = None
-    last_error = None
+    # 5. Call AI provider with retries, circuit breakers, and provider fallback
+    from openai import APITimeoutError as OpenAIAPITimeoutError, APIConnectionError as OpenAIAPIConnectionError
+    from openai import RateLimitError as OpenAIRateLimitError
 
-    for attempt in range(3):
-        try:
-            if provider == "claude":
-                if not claude_client:
-                    raise ValueError("Claude API key not configured")
-                response = claude_client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": prompt}],
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
+
+    def _call_claude(p: str) -> str:
+        if not claude_client:
+            raise ValueError("Claude API key not configured")
+        last_err = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                with claude_breaker:
+                    resp = claude_client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": p}],
+                    )
+                return resp.content[0].text
+            except CircuitBreakerOpen:
+                raise
+            except anthropic.RateLimitError as e:
+                last_err = e
+                retry_after = float(e.response.headers.get("retry-after", BASE_DELAY * (2 ** attempt)))
+                sleep_for = min(retry_after, MAX_DELAY)
+                logger.warning(f"Claude rate limited (tournament, attempt {attempt + 1}/{MAX_ATTEMPTS}); sleeping {sleep_for:.0f}s")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(sleep_for)
+            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+                last_err = e
+                logger.warning(f"Claude tournament attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        if isinstance(last_err, anthropic.APITimeoutError):
+            raise AITimeoutError("claude") from last_err
+        raise last_err  # type: ignore[misc]
+
+    def _call_grok(p: str) -> str:
+        if not grok_client:
+            raise ValueError("Grok API key not configured")
+        last_err = None
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                with grok_breaker:
+                    resp = grok_client.chat.completions.create(
+                        model="grok-3",
+                        messages=[{"role": "user", "content": p}],
+                        max_tokens=1024,
+                    )
+                return resp.choices[0].message.content
+            except CircuitBreakerOpen:
+                raise
+            except OpenAIRateLimitError as e:
+                last_err = e
+                retry_after = BASE_DELAY * (2 ** attempt)
+                if hasattr(e, "response") and e.response is not None:
+                    retry_after = float(e.response.headers.get("retry-after", retry_after))
+                sleep_for = min(retry_after, MAX_DELAY)
+                logger.warning(f"Grok rate limited (tournament, attempt {attempt + 1}/{MAX_ATTEMPTS}); sleeping {sleep_for:.0f}s")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(sleep_for)
+            except (OpenAIAPITimeoutError, OpenAIAPIConnectionError) as e:
+                last_err = e
+                logger.warning(f"Grok tournament attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        if isinstance(last_err, OpenAIAPITimeoutError):
+            raise AITimeoutError("grok") from last_err
+        raise last_err  # type: ignore[misc]
+
+    primary_call = _call_claude if provider == "claude" else _call_grok if provider == "grok" else None
+    if primary_call is None:
+        raise ValueError(f"Unknown provider: {provider}")
+
+    fallback_provider_name: Optional[AIProvider] = "grok" if provider == "claude" else "claude"
+    fallback_call = _call_grok if provider == "claude" else _call_claude
+
+    response_text: Optional[str] = None
+    primary_error: Optional[Exception] = None
+
+    try:
+        response_text = primary_call(prompt)
+    except CircuitBreakerOpen as e:
+        logger.warning(f"Circuit breaker blocked tournament analysis on {provider}: {e}")
+        primary_error = e
+    except (ValueError, AITimeoutError):
+        raise  # Not retriable — propagate immediately
+    except Exception as e:
+        logger.error(f"Tournament AI primary '{provider}' failed: {_sanitize_error_message(str(e))}")
+        primary_error = e
+
+    if response_text is None and primary_error is not None:
+        fallback_client_available = bool(claude_client if fallback_provider_name == "claude" else grok_client)
+        if fallback_client_available:
+            logger.info(f"Tournament analysis falling back to '{fallback_provider_name}' after '{provider}' failure")
+            try:
+                response_text = fallback_call(prompt)
+                provider = fallback_provider_name  # type: ignore[assignment]
+            except Exception as fallback_exc:
+                logger.error(
+                    f"Tournament AI fallback '{fallback_provider_name}' also failed: "
+                    f"{_sanitize_error_message(str(fallback_exc))}"
                 )
-                response_text = response.content[0].text
-            elif provider == "grok":
-                if not grok_client:
-                    raise ValueError("Grok API key not configured")
-                response = grok_client.chat.completions.create(
-                    model="grok-3",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1024,
-                )
-                response_text = response.choices[0].message.content
-            else:
-                raise ValueError(f"Unknown provider: {provider}")
-            break
-        except Exception as e:
-            last_error = e
-            logger.warning(f"Tournament AI analysis attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+                raise RuntimeError(
+                    f"Tournament AI analysis failed on both providers: "
+                    f"{_sanitize_error_message(str(primary_error))}"
+                ) from fallback_exc
 
     if response_text is None:
         raise RuntimeError(
-            f"Tournament AI analysis failed after 3 attempts: {_sanitize_error_message(str(last_error))}"
+            f"Tournament AI analysis failed: {_sanitize_error_message(str(primary_error))}"
         )
 
     # 6. Parse combined AI response
@@ -1249,6 +1347,8 @@ def analyze_with_claude(context: dict) -> dict:
                 delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
                 time.sleep(delay)
     else:
+        if isinstance(last_error, anthropic.APITimeoutError):
+            raise AITimeoutError("claude") from last_error
         raise last_error
 
     # Parse response
@@ -1346,6 +1446,8 @@ def analyze_with_grok(context: dict) -> dict:
                 delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
                 time.sleep(delay)
     else:
+        if isinstance(last_error, APITimeoutError):
+            raise AITimeoutError("grok") from last_error
         raise last_error
 
     response_text = response.choices[0].message.content
@@ -1385,7 +1487,13 @@ def analyze_game(
 
     Returns:
         Analysis result dict
+
+    Raises:
+        ValueError: If game_id is not a valid UUID or game is not found
+        AITimeoutError: If the AI provider times out after all retry attempts
     """
+    if not _UUID_PATTERN.match(game_id):
+        raise ValueError(f"Invalid game_id format: '{game_id}'. Must be a UUID.")
     # Build context
     context = build_game_context(game_id)
 
