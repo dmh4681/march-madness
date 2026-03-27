@@ -163,6 +163,14 @@ export function AIAnalysisButton({
       setAutoRetryCount(0);
     }
 
+    // Validate gameId is a proper UUID before sending to the API
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidPattern.test(gameId)) {
+      setError({ type: 'unknown', message: 'Invalid game ID format.', canRetry: false });
+      setLoading(false);
+      return;
+    }
+
     let response: Response | undefined;
     let responseText: string | undefined;
 

@@ -2317,16 +2317,12 @@ def get_prediction_markets():
 
 
 @app.get("/games/{game_id}/prediction-data", tags=["Prediction Markets"])
-def get_game_prediction_data(game_id: Annotated[str, Path(description="Game ID (UUID format)")]):
+def get_game_prediction_data(game_id: GameIdPath):
     """
     Get prediction market data and arbitrage opportunities for a specific game.
 
     Returns markets matched to the game's teams plus any detected arbitrage.
     """
-    # Validate UUID format
-    uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
-    if not uuid_pattern.match(game_id):
-        raise HTTPException(status_code=400, detail="Invalid game ID format")
 
     try:
         from .supabase_client import get_supabase
@@ -3755,6 +3751,7 @@ def get_tournament_ai_analysis(
     round: Optional[str] = Query(
         default=None,
         description="Filter by tournament round",
+        pattern=r'^(first_four|round_64|round_32|sweet_16|elite_8|final_4|championship)$',
     ),
 ):
     """
