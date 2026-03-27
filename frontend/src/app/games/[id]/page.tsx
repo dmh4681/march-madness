@@ -189,8 +189,16 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default async function GameDetailPage({ params }: PageProps) {
   const { id } = await params;
+
+  // Reject non-UUID path parameters before hitting the database
+  if (!UUID_PATTERN.test(id)) {
+    notFound();
+  }
+
   const game = await getGame(id);
 
   if (!game) {
