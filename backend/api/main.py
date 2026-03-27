@@ -3470,16 +3470,6 @@ class GeneratePicksRequest(BaseModel):
         return v
 
 
-@app.get("/tournament/{season}", tags=["Tournament"])
-@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
-def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
-    """Get tournament metadata for a season. Creates the tournament if it doesn't exist."""
-    tournament = get_tournament(season)
-    if not tournament:
-        tournament = create_tournament(season)
-    return success_response(tournament)
-
-
 @app.get("/tournament/bracket", tags=["Tournament"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_bracket(
@@ -3882,6 +3872,19 @@ def generate_tournament_picks(
         "poll_url": f"/api/v1/batch-analyze/{job_id}",
         "message": f"Generating {body.provider} picks for {body.season} tournament",
     })
+
+
+# NOTE: This parameterized GET route must be registered AFTER all static
+# /tournament/* GET routes (bracket, regions, ai-analysis) so that FastAPI
+# matches those specific paths before treating the segment as {season}.
+@app.get("/tournament/{season}", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
+    """Get tournament metadata for a season. Creates the tournament if it doesn't exist."""
+    tournament = get_tournament(season)
+    if not tournament:
+        tournament = create_tournament(season)
+    return success_response(tournament)
 
 
 if __name__ == "__main__":
