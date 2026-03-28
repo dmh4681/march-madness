@@ -981,6 +981,12 @@ Respond with ONLY the JSON object, no additional text."""
     return prompt
 
 
+_UUID_RE = re.compile(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+)
+_VALID_PROVIDERS = frozenset({"claude", "grok"})
+
+
 def analyze_tournament_game(
     game_id: str,
     provider: AIProvider = "claude",
@@ -1009,9 +1015,16 @@ def analyze_tournament_game(
         bet_key_factors, bet_reasoning, created_at
 
     Raises:
-        ValueError: If game_id is not a tournament game or provider is invalid
+        ValueError: If game_id format is invalid, game is not a tournament game,
+                    or provider is not "claude"/"grok"
         RuntimeError: If AI call fails after retries
     """
+    # Input validation
+    if not game_id or not _UUID_RE.match(game_id):
+        raise ValueError(f"game_id must be a valid UUID, got: {game_id!r}")
+    if provider not in _VALID_PROVIDERS:
+        raise ValueError(f"provider must be 'claude' or 'grok', got: {provider!r}")
+
     # 1. Fetch tournament bracket data for this game
     tournament_game = get_tournament_game_data(game_id)
     if not tournament_game:
@@ -1047,42 +1060,88 @@ def analyze_tournament_game(
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
     # 5. Call AI provider with retries
+    from openai import APITimeoutError as OpenAITimeoutError, APIConnectionError as OpenAIConnectionError
+    from openai import RateLimitError as OpenAIRateLimitError
+
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
+
     response_text = None
     last_error = None
 
-    for attempt in range(3):
-        try:
-            if provider == "claude":
-                if not claude_client:
-                    raise ValueError("Claude API key not configured")
-                response = claude_client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+    if provider == "claude":
+        if not claude_client:
+            raise ValueError("Claude API key not configured")
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                with claude_breaker:
+                    response = claude_client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
                 response_text = response.content[0].text
-            elif provider == "grok":
-                if not grok_client:
-                    raise ValueError("Grok API key not configured")
-                response = grok_client.chat.completions.create(
-                    model="grok-3",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1024,
+                break
+            except CircuitBreakerOpen:
+                raise
+            except anthropic.RateLimitError as e:
+                last_error = e
+                retry_after = float(e.response.headers.get("retry-after", BASE_DELAY * (2 ** attempt)))
+                sleep_for = min(retry_after, MAX_DELAY)
+                logger.warning(
+                    f"Claude rate limited on tournament analysis (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                    f"sleeping {sleep_for:.0f}s"
                 )
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(sleep_for)
+            except (anthropic.APITimeoutError, anthropic.APIConnectionError) as e:
+                last_error = e
+                logger.warning(f"Claude tournament AI attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        else:
+            raise RuntimeError(
+                f"Tournament AI analysis (claude) failed after {MAX_ATTEMPTS} attempts: "
+                f"{_sanitize_error_message(str(last_error))}"
+            )
+    else:  # provider == "grok"
+        if not grok_client:
+            raise ValueError("Grok API key not configured")
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                with grok_breaker:
+                    response = grok_client.chat.completions.create(
+                        model="grok-3",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=1024,
+                    )
                 response_text = response.choices[0].message.content
-            else:
-                raise ValueError(f"Unknown provider: {provider}")
-            break
-        except Exception as e:
-            last_error = e
-            logger.warning(f"Tournament AI analysis attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-
-    if response_text is None:
-        raise RuntimeError(
-            f"Tournament AI analysis failed after 3 attempts: {_sanitize_error_message(str(last_error))}"
-        )
+                break
+            except CircuitBreakerOpen:
+                raise
+            except OpenAIRateLimitError as e:
+                last_error = e
+                retry_after = BASE_DELAY * (2 ** attempt)
+                if hasattr(e, "response") and e.response is not None:
+                    retry_after = float(e.response.headers.get("retry-after", retry_after))
+                sleep_for = min(retry_after, MAX_DELAY)
+                logger.warning(
+                    f"Grok rate limited on tournament analysis (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                    f"sleeping {sleep_for:.0f}s"
+                )
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(sleep_for)
+            except (OpenAITimeoutError, OpenAIConnectionError) as e:
+                last_error = e
+                logger.warning(f"Grok tournament AI attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+                if attempt < MAX_ATTEMPTS - 1:
+                    time.sleep(_jitter_delay(attempt, BASE_DELAY, MAX_DELAY))
+        else:
+            raise RuntimeError(
+                f"Tournament AI analysis (grok) failed after {MAX_ATTEMPTS} attempts: "
+                f"{_sanitize_error_message(str(last_error))}"
+            )
 
     # 6. Parse combined AI response
     analysis = _extract_json_from_response(response_text)
