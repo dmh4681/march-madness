@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useTransition } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { formatSpread } from '@/lib/api';
+import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import type {
   Tournament,
   BracketMatchup,
@@ -217,6 +218,49 @@ function RegionCard({
 }
 
 // ============================================
+// RegionCardErrorBoundary
+// ============================================
+
+function RegionCardErrorFallback({ region }: { region: string }) {
+  return (
+    <div className="bg-gray-900 border border-red-800/40 rounded-lg overflow-hidden">
+      <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-800 flex items-center justify-between">
+        <h3 className="text-sm sm:text-base font-bold text-white uppercase tracking-wide">
+          {region}
+        </h3>
+      </div>
+      <div className="px-4 py-6 text-center">
+        <div className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-red-500/10 mb-2">
+          <svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
+          </svg>
+        </div>
+        <p className="text-sm text-red-400">Failed to render region</p>
+        <p className="text-xs text-gray-500 mt-1">Reload the page to try again</p>
+      </div>
+    </div>
+  );
+}
+
+function RegionCardWithBoundary({
+  region,
+  matchups,
+  seeds,
+}: {
+  region: TournamentRegion;
+  matchups: BracketMatchup[];
+  seeds: RegionSeedEntry[];
+}) {
+  return (
+    <ErrorBoundary fallback={<RegionCardErrorFallback region={region} />}>
+      <RegionCard region={region} matchups={matchups} seeds={seeds} />
+    </ErrorBoundary>
+  );
+}
+
+// ============================================
 // RegionSeedSidebar
 // ============================================
 
@@ -319,6 +363,7 @@ export function BracketView({
 }: BracketViewProps) {
   const [selectedRegion, setSelectedRegion] = useState<TournamentRegion | 'All'>('All');
   const [selectedRound, setSelectedRound] = useState<TournamentRound | 'All'>('All');
+  const [isPending, startTransition] = useTransition();
 
   // Available rounds (only show tabs for rounds that exist)
   const availableRounds = useMemo(() => {
@@ -461,7 +506,7 @@ export function BracketView({
             <button
               key={region}
               type="button"
-              onClick={() => setSelectedRegion(region === 'All' ? 'All' : region)}
+              onClick={() => startTransition(() => setSelectedRegion(region === 'All' ? 'All' : region))}
               className={cn(
                 "px-4 py-2 min-h-[44px] text-sm font-medium rounded-lg shrink-0 transition-colors",
                 selectedRegion === region
@@ -481,7 +526,7 @@ export function BracketView({
           <div className="flex gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
             <button
               type="button"
-              onClick={() => setSelectedRound('All')}
+              onClick={() => startTransition(() => setSelectedRound('All'))}
               className={cn(
                 "px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-md shrink-0 transition-colors",
                 selectedRound === 'All'
@@ -495,7 +540,7 @@ export function BracketView({
               <button
                 key={round}
                 type="button"
-                onClick={() => setSelectedRound(round)}
+                onClick={() => startTransition(() => setSelectedRound(round))}
                 className={cn(
                   "px-3 py-1.5 min-h-[36px] text-xs font-medium rounded-md shrink-0 transition-colors",
                   selectedRound === round
@@ -507,6 +552,17 @@ export function BracketView({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Filter transition loading indicator */}
+      {isPending && (
+        <div className="mb-3 flex items-center gap-2 text-xs text-gray-500">
+          <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          Updating...
         </div>
       )}
 
@@ -525,7 +581,7 @@ export function BracketView({
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {matchupsByRegion.map(({ region, matchups: regionMatchups, seeds }) => (
-                  <RegionCard
+                  <RegionCardWithBoundary
                     key={region}
                     region={region}
                     matchups={regionMatchups}
@@ -536,7 +592,7 @@ export function BracketView({
               {/* Cross-region games (Final Four / Championship) */}
               {crossRegionMatchups.length > 0 && (
                 <div className="mt-4">
-                  <RegionCard
+                  <RegionCardWithBoundary
                     region={"Final Four" as TournamentRegion}
                     matchups={crossRegionMatchups}
                     seeds={[]}
@@ -546,7 +602,7 @@ export function BracketView({
             </>
           ) : (
             // Single region selected - full width
-            <RegionCard
+            <RegionCardWithBoundary
               region={selectedRegion as TournamentRegion}
               matchups={filteredMatchups}
               seeds={regionSeeds.filter(s => s.region === selectedRegion)}
