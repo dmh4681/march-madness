@@ -40,6 +40,17 @@ async function getBracketData(): Promise<{
       .order('region', { ascending: true }),
   ]);
 
+  // PGRST116 = "no rows returned by .single()" — expected when no tournament exists yet
+  if (tournamentResult.error && tournamentResult.error.code !== 'PGRST116') {
+    throw new Error(`Failed to load tournament: ${tournamentResult.error.message}`);
+  }
+  if (matchupsResult.error) {
+    throw new Error(`Failed to load bracket matchups: ${matchupsResult.error.message}`);
+  }
+  if (seedsResult.error) {
+    throw new Error(`Failed to load tournament seeds: ${seedsResult.error.message}`);
+  }
+
   return {
     tournament: (tournamentResult.data as Tournament | null) ?? null,
     matchups: (matchupsResult.data as BracketMatchup[] | null) ?? [],
