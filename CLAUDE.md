@@ -96,6 +96,7 @@ march-madness/
 | `/tournament/{season}` | GET | Tournament metadata (creates if needed) |
 | `/tournament/bracket` | GET | Bracket matchups (filter by region/round) |
 | `/tournament/regions` | GET | Seeds grouped by region |
+| `/tournament/context` | GET | Full game context: seeds, analytics, lines, pick (no AI call) |
 | `/tournament/set-bracket` | POST | Batch populate seeds (Selection Sunday) |
 | `/tournament/pick` | POST | Make/update a bracket pick |
 | `/tournament/grade` | POST | Grade picks and update eliminations |
