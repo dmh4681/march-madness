@@ -219,6 +219,7 @@ from .supabase_client import (
     upsert_bracket_pick,
     grade_bracket_picks,
     update_eliminated_teams,
+    update_game_score,
 )
 from .ai_service import analyze_game, analyzer, get_quick_recommendation, build_game_context, analyze_tournament_game
 
@@ -3470,6 +3471,42 @@ class GeneratePicksRequest(BaseModel):
         return v
 
 
+class GameOutcomeWebhookRequest(BaseModel):
+    """
+    Request model for POST /tournament/game-outcome.
+
+    Records the final score of a tournament game and automatically grades
+    bracket picks and updates elimination status.
+
+    Example Request:
+        {
+            "game_id": "123e4567-e89b-12d3-a456-426614174000",
+            "home_score": 78,
+            "away_score": 65
+        }
+    """
+    game_id: str = Field(..., description="UUID of the completed tournament game")
+    home_score: int = Field(..., ge=0, le=999, description="Final home team score")
+    away_score: int = Field(..., ge=0, le=999, description="Final away team score")
+    status: str = Field(default="final", description="Game status to set (default: 'final')")
+
+    @field_validator('game_id')
+    @classmethod
+    def validate_game_id(cls, v: str) -> str:
+        if not UUID_PATTERN.match(v):
+            raise ValueError('game_id must be a valid UUID')
+        return v
+
+    @field_validator('status')
+    @classmethod
+    def validate_status(cls, v: str) -> str:
+        allowed = {"final", "complete", "finished"}
+        v = v.lower().strip()
+        if v not in allowed:
+            raise ValueError(f'status must be one of: {", ".join(sorted(allowed))}')
+        return v
+
+
 @app.get("/tournament/{season}", tags=["Tournament"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
@@ -3881,6 +3918,89 @@ def generate_tournament_picks(
         "status": "queued",
         "poll_url": f"/api/v1/batch-analyze/{job_id}",
         "message": f"Generating {body.provider} picks for {body.season} tournament",
+    })
+
+
+@app.post("/tournament/game-outcome", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def record_tournament_game_outcome(
+    request: Request,
+    body: GameOutcomeWebhookRequest,
+    webhook_secret: Annotated[
+        Optional[str],
+        Query(max_length=200, description="Optional webhook authentication secret")
+    ] = None,
+):
+    """
+    Record the final score of a completed tournament game and auto-grade bracket picks.
+
+    This webhook endpoint is called when a tournament game finishes. It:
+    1. Validates the game exists and is a tournament game
+    2. Updates the game with final scores and status
+    3. Grades all bracket picks for the tournament season
+    4. Updates elimination status for losing teams
+
+    Authentication: If WEBHOOK_SECRET is set in environment, requests must
+    supply the matching `webhook_secret` query parameter.
+
+    Args:
+        body: GameOutcomeWebhookRequest with game_id, home_score, away_score, status
+
+    Returns:
+        Summary with game_id, scores, picks_graded, correct, incorrect, teams_eliminated
+
+    Raises:
+        401 Unauthorized: If webhook_secret does not match WEBHOOK_SECRET env var
+        404 Not Found: If game_id is not found or is not a tournament game
+        422 Validation Error: If request body is invalid
+
+    Rate Limit: 30 requests per minute per IP
+
+    Example Request:
+        POST /tournament/game-outcome
+        {"game_id": "123e4567-e89b-12d3-a456-426614174000", "home_score": 78, "away_score": 65}
+    """
+    # Optional secret-based auth (mirrors REFRESH_API_KEY pattern)
+    expected_secret = os.getenv("WEBHOOK_SECRET")
+    if expected_secret and webhook_secret != expected_secret:
+        raise HTTPException(status_code=401, detail="Invalid or missing webhook_secret")
+
+    # Validate game exists and is a tournament game
+    game = get_game_by_id(body.game_id)
+    if not game:
+        raise NotFoundException(resource="Game", identifier=body.game_id)
+    if not game.get("is_tournament"):
+        raise ValidationException(
+            message="Game is not a tournament game",
+            details={"game_id": body.game_id}
+        )
+
+    # Persist final scores
+    update_game_score(body.game_id, body.home_score, body.away_score, body.status)
+    logger.info(
+        f"Tournament game outcome recorded: game_id={body.game_id} "
+        f"home={body.home_score} away={body.away_score} status={body.status}"
+    )
+
+    # Auto-grade picks and update eliminations for the tournament
+    tournament = get_tournament(game["season"])
+    if not tournament:
+        raise NotFoundException(resource="Tournament", identifier=str(game["season"]))
+
+    tournament_id = tournament["id"]
+    grade_result = grade_bracket_picks(tournament_id)
+    eliminated_count = update_eliminated_teams(tournament_id)
+
+    return success_response({
+        "game_id": body.game_id,
+        "home_score": body.home_score,
+        "away_score": body.away_score,
+        "status": body.status,
+        "tournament_id": tournament_id,
+        "picks_graded": grade_result["graded"],
+        "correct": grade_result["correct"],
+        "incorrect": grade_result["incorrect"],
+        "teams_eliminated": eliminated_count,
     })
 
 
