@@ -3470,6 +3470,108 @@ class GeneratePicksRequest(BaseModel):
         return v
 
 
+@app.get("/tournament/context", tags=["Tournament"])
+@limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
+def get_tournament_context(
+    request: Request,
+    game_id: str = Query(
+        ...,
+        description="UUID of the tournament game",
+        pattern=r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+    ),
+):
+    """
+    Retrieve full context for a tournament game without triggering AI analysis.
+
+    Aggregates all available data sources into a single response:
+    - Game metadata (teams, date, venue, neutral site)
+    - Tournament-specific data (seeds, region, round, existing pick)
+    - Betting lines (spread, moneylines, total)
+    - KenPom advanced analytics (when available)
+    - Haslametrics analytics (when available)
+    - Seed matchup history (historical outcomes for this seed pairing)
+    - Prediction market data (Polymarket / Kalshi, when available)
+    - Arbitrage opportunities (when detected)
+
+    Use this endpoint to display context cards in the UI before calling
+    AI analysis, or to cache context data independently of AI results.
+
+    Example:
+        GET /tournament/context?game_id=123e4567-89ab-cdef-0123-456789abcdef
+    """
+    # Validate UUID format (belt-and-suspenders beyond Query pattern)
+    if not UUID_PATTERN.match(game_id):
+        raise ValidationException(
+            message="Invalid game_id format",
+            details={"expected": "UUID v4"}
+        )
+
+    # Fetch tournament-specific data first to confirm it's a tournament game
+    tournament_game = get_tournament_game_data(game_id)
+    if not tournament_game:
+        raise NotFoundException(resource="Tournament game", identifier=game_id)
+
+    # Build full game context (KenPom, Haslametrics, spreads, prediction markets)
+    try:
+        game_context = build_game_context(game_id)
+    except ValueError as exc:
+        raise NotFoundException(resource="Game", identifier=game_id) from exc
+
+    # Fetch seed matchup history
+    home_seed = tournament_game.get("home_seed")
+    away_seed = tournament_game.get("away_seed")
+    seed_history = None
+    if home_seed is not None and away_seed is not None:
+        try:
+            try:
+                from backend.data_collection.bracket_pick_generator import get_seed_matchup_context
+            except ImportError:
+                from ..data_collection.bracket_pick_generator import get_seed_matchup_context
+            seed_history = get_seed_matchup_context(home_seed, away_seed)
+        except Exception:
+            seed_history = None
+
+    context = {
+        # Game metadata
+        "game_id": game_id,
+        "date": game_context.get("date"),
+        "home_team": game_context.get("home_team"),
+        "away_team": game_context.get("away_team"),
+        "home_conference": game_context.get("home_conference"),
+        "away_conference": game_context.get("away_conference"),
+        "home_rank": game_context.get("home_rank"),
+        "away_rank": game_context.get("away_rank"),
+        "venue": game_context.get("venue"),
+        "neutral_site": game_context.get("neutral_site"),
+        # Tournament-specific
+        "tournament_round": tournament_game.get("tournament_round"),
+        "region": tournament_game.get("home_region") or tournament_game.get("away_region"),
+        "home_seed": home_seed,
+        "away_seed": away_seed,
+        "seed_history": seed_history,
+        # Existing pick (if any)
+        "picked_team_id": tournament_game.get("picked_team_id"),
+        "picked_team": tournament_game.get("picked_team"),
+        "pick_confidence": tournament_game.get("pick_confidence"),
+        "pick_reasoning": tournament_game.get("pick_reasoning"),
+        # Betting lines
+        "spread": game_context.get("spread"),
+        "home_ml": game_context.get("home_ml"),
+        "away_ml": game_context.get("away_ml"),
+        "total": game_context.get("total"),
+        # Advanced analytics
+        "home_kenpom": game_context.get("home_kenpom"),
+        "away_kenpom": game_context.get("away_kenpom"),
+        "home_haslametrics": game_context.get("home_haslametrics"),
+        "away_haslametrics": game_context.get("away_haslametrics"),
+        # Prediction markets and arbitrage
+        "prediction_markets": game_context.get("prediction_markets"),
+        "arbitrage_opportunities": game_context.get("arbitrage_opportunities"),
+    }
+
+    return success_response(context)
+
+
 @app.get("/tournament/{season}", tags=["Tournament"])
 @limiter.limit(RATE_LIMIT_STANDARD_ENDPOINTS)
 def get_tournament_info(request: Request, season: int = Path(..., ge=2000, le=2100)):
