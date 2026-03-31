@@ -1046,42 +1046,91 @@ def analyze_tournament_game(
     prompt = build_combined_tournament_prompt(context, matchup_metadata)
     prompt_hash = hashlib.md5(prompt.encode()).hexdigest()[:16]
 
-    # 5. Call AI provider with retries
+    # 5. Call AI provider with retries (circuit breaker + rate-limit aware backoff)
+    from openai import APITimeoutError as OAITimeoutError, APIConnectionError as OAIConnectionError
+    from openai import RateLimitError as OpenAIRateLimitError
+
+    MAX_ATTEMPTS = 3
+    BASE_DELAY = 2.0
+    MAX_DELAY = 30.0
+
+    if provider == "claude" and not claude_client:
+        raise ValueError("Claude API key not configured")
+    if provider == "grok" and not grok_client:
+        raise ValueError("Grok API key not configured")
+    if provider not in ("claude", "grok"):
+        raise ValueError(f"Unknown provider: {provider}")
+
     response_text = None
     last_error = None
 
-    for attempt in range(3):
+    for attempt in range(MAX_ATTEMPTS):
         try:
             if provider == "claude":
-                if not claude_client:
-                    raise ValueError("Claude API key not configured")
-                response = claude_client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=1024,
-                    messages=[{"role": "user", "content": prompt}],
-                )
+                with claude_breaker:
+                    response = claude_client.messages.create(
+                        model="claude-sonnet-4-20250514",
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
                 response_text = response.content[0].text
-            elif provider == "grok":
-                if not grok_client:
-                    raise ValueError("Grok API key not configured")
-                response = grok_client.chat.completions.create(
-                    model="grok-3",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=1024,
-                )
+            else:  # grok
+                with grok_breaker:
+                    response = grok_client.chat.completions.create(
+                        model="grok-3",
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=1024,
+                    )
                 response_text = response.choices[0].message.content
-            else:
-                raise ValueError(f"Unknown provider: {provider}")
-            break
+            break  # success — exit retry loop
+        except CircuitBreakerOpen:
+            raise  # circuit is open; don't retry
+        except anthropic.RateLimitError as e:
+            last_error = e
+            retry_after = float(e.response.headers.get("retry-after", BASE_DELAY * (2 ** attempt)))
+            sleep_for = min(retry_after, MAX_DELAY)
+            logger.warning(
+                f"Tournament Claude rate limited (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                f"sleeping {sleep_for:.0f}s"
+            )
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(sleep_for)
+        except OpenAIRateLimitError as e:
+            last_error = e
+            retry_after = BASE_DELAY * (2 ** attempt)
+            if hasattr(e, "response") and e.response is not None:
+                retry_after = float(e.response.headers.get("retry-after", retry_after))
+            sleep_for = min(retry_after, MAX_DELAY)
+            logger.warning(
+                f"Tournament Grok rate limited (attempt {attempt + 1}/{MAX_ATTEMPTS}); "
+                f"sleeping {sleep_for:.0f}s"
+            )
+            if attempt < MAX_ATTEMPTS - 1:
+                time.sleep(sleep_for)
+        except (
+            anthropic.APITimeoutError,
+            anthropic.APIConnectionError,
+            OAITimeoutError,
+            OAIConnectionError,
+        ) as e:
+            last_error = e
+            logger.warning(f"Tournament AI attempt {attempt + 1}/{MAX_ATTEMPTS} failed: {e}")
+            if attempt < MAX_ATTEMPTS - 1:
+                delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
+                time.sleep(delay)
+        except ValueError:
+            raise  # config errors — don't retry
         except Exception as e:
             last_error = e
-            logger.warning(f"Tournament AI analysis attempt {attempt + 1}/3 failed: {e}")
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+            logger.warning(f"Tournament AI attempt {attempt + 1}/{MAX_ATTEMPTS} unexpected error: {e}")
+            if attempt < MAX_ATTEMPTS - 1:
+                delay = _jitter_delay(attempt, BASE_DELAY, MAX_DELAY)
+                time.sleep(delay)
 
     if response_text is None:
         raise RuntimeError(
-            f"Tournament AI analysis failed after 3 attempts: {_sanitize_error_message(str(last_error))}"
+            f"Tournament AI analysis failed after {MAX_ATTEMPTS} attempts: "
+            f"{_sanitize_error_message(str(last_error))}"
         )
 
     # 6. Parse combined AI response
@@ -1426,8 +1475,24 @@ def analyze_game(
                 f"Fallback provider '{fallback}' also failed: "
                 f"{_sanitize_error_message(str(fallback_exc))}"
             )
-            # Re-raise the original error
-            raise primary_error from fallback_exc  # type: ignore[misc]
+            # Both AI providers failed — use heuristic as last resort
+            logger.warning("Both AI providers failed; using heuristic fallback recommendation")
+            heuristic = get_quick_recommendation(context)
+            analysis = {
+                "ai_provider": "heuristic",
+                "model_used": "rule-based",
+                "analysis_type": "heuristic",
+                "prompt_hash": "",
+                "response": heuristic.get("reasoning", ""),
+                "recommended_bet": heuristic.get("recommended_bet", "pass"),
+                "confidence_score": heuristic.get("confidence_score", 0.5),
+                "key_factors": [],
+                "reasoning": heuristic.get("reasoning", ""),
+                "tokens_used": 0,
+                "fallback_from": provider,
+                "heuristic_fallback": True,
+                "primary_error": _sanitize_error_message(str(primary_error)),
+            }
 
     if analysis is None:
         raise primary_error  # type: ignore[misc]
