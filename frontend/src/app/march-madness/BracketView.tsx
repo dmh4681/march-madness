@@ -174,6 +174,9 @@ function MatchupRow({ matchup }: { matchup: BracketMatchup }) {
 function RegionCardErrorBoundary({ region, children }: { region: string; children: ReactNode }) {
   return (
     <ErrorBoundary
+      onError={(error) => {
+        console.error(`[BracketView] ${region} region failed to render:`, error);
+      }}
       fallbackRender={({ retry }) => (
         <div className="bg-gray-900 border border-red-500/20 rounded-lg overflow-hidden">
           <div className="px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-800">
@@ -486,26 +489,51 @@ export function BracketView({
   // ---- Post-selection bracket view ----
   return (
     <>
+      {/* ARIA live region announces filter changes to screen readers */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {isPending
+          ? 'Loading bracket...'
+          : selectedRegion === 'All' && selectedRound === 'All'
+          ? 'Showing all matchups'
+          : `Showing ${selectedRegion === 'All' ? 'all regions' : selectedRegion}${selectedRound !== 'All' ? `, ${ROUND_LABELS[selectedRound]}` : ''}`
+        }
+      </div>
+
       {isStale && <StaleDataBanner />}
 
       {/* Region filter tabs */}
       <div className="mb-4 -mx-3 px-3 sm:mx-0 sm:px-0">
-        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-          {(['All', ...REGIONS] as const).map((region) => (
-            <button
-              key={region}
-              type="button"
-              onClick={() => startTransition(() => setSelectedRegion(region === 'All' ? 'All' : region))}
-              className={cn(
-                "px-4 py-2 min-h-[44px] text-sm font-medium rounded-lg shrink-0 transition-colors",
-                selectedRegion === region
-                  ? "bg-orange-600 text-white"
-                  : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-              )}
+        <div className="flex items-center gap-2">
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide flex-1">
+            {(['All', ...REGIONS] as const).map((region) => (
+              <button
+                key={region}
+                type="button"
+                onClick={() => startTransition(() => setSelectedRegion(region === 'All' ? 'All' : region))}
+                className={cn(
+                  "px-4 py-2 min-h-[44px] text-sm font-medium rounded-lg shrink-0 transition-colors",
+                  selectedRegion === region
+                    ? "bg-orange-600 text-white"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                )}
+              >
+                {region}
+              </button>
+            ))}
+          </div>
+          {/* Spinner visible during transition */}
+          {isPending && (
+            <svg
+              className="w-4 h-4 text-orange-400 animate-spin shrink-0 mb-2"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
             >
-              {region}
-            </button>
-          ))}
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          )}
         </div>
       </div>
 
